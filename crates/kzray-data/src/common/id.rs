@@ -29,16 +29,27 @@ macro_rules! typed_ref {
         #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
         #[serde(transparent)]
         pub struct $name(pub EntityId);
+
+        impl From<EntityId> for $name {
+            fn from(id: EntityId) -> Self { $name(id) }
+        }
+
+        impl From<$name> for EntityId {
+            fn from(t: $name) -> Self { t.0 }
+        }
     };
 }
 
-typed_ref!(GeometryRef, "指向 `RenderInput.geometries` 的引用。");
-typed_ref!(MaterialRef, "指向 `RenderInput.materials` 的引用。");
-typed_ref!(TextureId, "指向外部 bitmap 纹理资源的 id。");
-typed_ref!(FieldId, "指向 `RenderInput.fields` 中命名 Field 的引用。");
-typed_ref!(LightRef, "指向 `RenderInput.lights` 的引用。");
-typed_ref!(VolumeRef, "指向 `RenderInput.volumes` 的引用。");
-typed_ref!(NodeId, "节点图 DAG 中一个节点的 id。");
+// 数据表 key 类型：既是类型，也是对应表的 key
+typed_ref!(GeometryRef, "指向 `RenderInput.geometries` 的 key。");
+typed_ref!(MaterialRef, "指向 `RenderInput.materials` 的 key。");
+typed_ref!(LightRef,    "指向 `RenderInput.lights` 的 key。");
+typed_ref!(FieldId,     "指向 `RenderInput.fields` 的 key。");
+typed_ref!(NodeId,      "指向 `RenderInput.nodes` 的 key。");
+typed_ref!(VolumeRef, "指向 `RenderInput.volumes` 的 key。");
+
+// 非表引用：外部资源 id，不指向 `RenderInput` 中的任何表
+typed_ref!(TextureId, "外部 bitmap 纹理资源 id（磁盘文件 / 外部 asset）。");
 
 /// 名字 → id 的注册表。加载器用，碰撞显式报错。
 pub struct IdMap<V> {
@@ -89,6 +100,16 @@ impl<V> IdMap<V> {
 
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    pub fn into_typed<K>(self) -> BTreeMap<K, V>
+    where
+        K: From<EntityId> + Ord,
+    {
+        self.entries
+            .into_iter()
+            .map(|(id, (_, v))| (K::from(id), v))
+            .collect()
     }
 }
 

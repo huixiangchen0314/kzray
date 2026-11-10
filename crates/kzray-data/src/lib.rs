@@ -25,13 +25,15 @@ pub mod light;
 pub mod shading;
 pub mod task;
 pub mod world;
-
+pub mod volume;
 // ── common 重导出 ──
 
 pub use common::{
     DataError, EntityId, FieldExpr, FieldId, GeometryRef, HasMeta, IdMap, LightRef, MaterialRef,
     Meta, Node, NodeId, NodeInput, NodeOutput, Param, Rect, TextureId, Transform, Value, VolumeRef,
 };
+pub use volume::{VolumeBounds, VolumeData, VolumeInstance};
+pub use world::WorldData;
 
 // ── geometry 重导出 ──
 
