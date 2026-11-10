@@ -4,3 +4,12 @@ Cargo.lock
 *.ppm
 *.png
 *.jpg
+
+# Emacs auto-save files (#file#)
+\#*\#
+
+# Emacs lock files (.#file)
+.#*
+
+# Emacs backup files (file~)
+*~

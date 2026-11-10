@@ -1,14 +1,19 @@
+//! 跨域基础类型。`common` 不依赖任何其他模块。
 
 pub mod error;
+pub mod field;
 pub mod id;
-pub mod param;
+pub mod node;
 pub mod rect;
 pub mod transform;
+pub mod value;
 
 pub use error::DataError;
+pub use field::{FieldExpr, FieldId};
 pub use id::{
-    EntityId, FieldId, GeometryRef, IdMap, LightRef, MaterialRef, TextureId, VolumeRef,
+    EntityId, GeometryRef, IdMap, LightRef, MaterialRef, NodeId, TextureId, VolumeRef,
 };
-pub use param::ParamValue;
+pub use node::{Node, NodeInput, NodeOutput};
 pub use rect::Rect;
 pub use transform::Transform;
+pub use value::Value;
