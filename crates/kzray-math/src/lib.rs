@@ -4,3 +4,4 @@ pub mod color;
 pub mod dist;
 pub mod onb;
 pub mod sampling;
+pub mod fresnel;
