@@ -1,0 +1,13 @@
+[package]
+name = "kzray-math"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam.workspace = true
+# 颜色空间转换（sRGB ↔ 线性 ↔ XYZ ↔ xyY）
+palette = "0.7"
+# 光谱色彩学（CIE 1931 CMF、光谱积分、标准光源）
+colorimetry = "0.0.9"
+# 高性能 sRGB ↔ 线性转换（SIMD 加速，热点路径备用）
+linear-srgb = "0.6"

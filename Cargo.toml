@@ -3,6 +3,8 @@ resolver = "2"
 members = [
     "crates/kzray-data",
     "crates/kzray-exec",
+    "crates/kzray-abs",
+    "crates/kzray-math",
 ]
 
 [workspace.package]
