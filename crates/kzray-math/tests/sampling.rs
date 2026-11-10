@@ -6,7 +6,7 @@
 //! 3. 余弦加权采样的方向分布符合 cosθ 权重
 //! 4. 世界空间包装与局部 + Onb 的组合一致
 
-use glam::{Vec2, Vec3};
+use glam::Vec3;
 use kzray_math::onb::Onb;
 use kzray_math::sampling::*;
 use std::f32::consts::PI;
@@ -142,14 +142,12 @@ fn uniform_sphere_mean_z_near_zero() {
 #[test]
 fn uniform_sphere_covers_both_hemispheres() {
     let mut above = 0;
-    let mut below = 0;
     for i in 0..N {
         let u1 = u_seq(i, 0.618_033_988_7);
         let u2 = u_seq(i, 0.754_877_666_2);
         let (d, _) = uniform_sphere(u1, u2);
-        if d.z > 0.0 { above += 1; } else { below += 1; }
+        if d.z > 0.0 { above += 1; }
     }
-    // 大约各占一半
     let frac = above as f32 / N as f32;
     assert!((frac - 0.5).abs() < 0.01, "上半球占比 {frac}");
 }
