@@ -244,19 +244,6 @@ fn beckmann_g2_le_g1() {
     }
 }
 
-#[test]
-fn beckmann_sample_vndf_upper_hemisphere() {
-    for alpha in [0.1f32, 0.5, 1.0] {
-        let wo = local_dir(0.8, 0.5).normalize();
-        for i in 0..1000 {
-            let u1 = u_seq(i, 0.618_033_988_7);
-            let u2 = u_seq(i, 0.754_877_666_2);
-            let m = beckmann::sample_vndf(wo, alpha, u1, u2);
-            assert!(m.z > 0.0, "alpha={alpha} i={i} m.z={}", m.z);
-            assert!((m.length() - 1.0).abs() < 1e-4);
-        }
-    }
-}
 
 
 
@@ -296,23 +283,52 @@ fn ggx_sample_vndf_typical_roughness_yields_majority_valid_wi() {
 }
 
 #[test]
-fn beckmann_sample_vndf_typical_roughness_yields_majority_valid_wi() {
-    // Beckmann 用 NDF 采样（不是严格的 VNDF），wi 向下的比例比 GGX VNDF 高。
-    // 只测典型 roughness，阈值比 GGX 更宽松。
-    for (alpha, threshold) in [(0.1f32, 0.85), (0.3, 0.75), (0.5, 0.65)] {
-        let wo = local_dir(0.9, 0.5).normalize();
-        let mut above = 0;
+fn beckmann_sample_ndf_upper_hemisphere() {
+    for alpha in [0.1f32, 0.5, 1.0] {
         for i in 0..1000 {
             let u1 = u_seq(i, 0.618_033_988_7);
             let u2 = u_seq(i, 0.754_877_666_2);
-            let m = beckmann::sample_vndf(wo, alpha, u1, u2);
-            let wi = reflect(wo, m);
-            if wi.z > 0.0 { above += 1; }
+            let m = beckmann::sample_ndf(alpha, u1, u2);
+            assert!(m.z > 0.0, "alpha={alpha} i={i} m.z={}", m.z);
+            assert!((m.length() - 1.0).abs() < 1e-4);
         }
-        let frac = above as f32 / 1000.0;
-        assert!(
-            frac >= threshold,
-            "alpha={alpha} 上半球比例 {frac}，典型粗糙度应 ≥ {threshold}"
-        );
     }
+}
+
+#[test]
+fn beckmann_pdf_ndf_integrates_to_one() {
+    // ∫ pdf_ndf(m) dω_m = ∫ D(m)·cosθ_m dω_m = 1
+    for alpha in [0.1f32, 0.3, 0.5, 0.8] {
+        let estimate = integrate_hemisphere(|m| beckmann::pdf_ndf(m, alpha));
+        assert!((estimate - 1.0).abs() < 0.02, "alpha={alpha} ∫pdf_ndf = {estimate}");
+    }
+}
+
+#[test]
+fn beckmann_sample_ndf_matches_pdf_mean_cos() {
+    // 验证采样分布与 pdf 一致：用 E[cosθ]（方差有限）
+    // 独立计算两个值：
+    //   1. 采样得到 E[cosθ]（sample_ndf 产生的样本的 m.z 均值）
+    //   2. 积分得到 E[cosθ]（用 integrate_hemisphere 对 cosθ·pdf 积分）
+    // 两者应匹配，说明采样分布 = pdf 声明的分布
+    let alpha = 0.3;
+    let n = 200_000;
+
+    let mut sum = 0.0f64;
+    for i in 0..n {
+        let u1 = u_seq(i, 0.618_033_988_7);
+        let u2 = u_seq(i, 0.754_877_666_2);
+        let m = beckmann::sample_ndf(alpha, u1, u2);
+        sum += m.z as f64;
+    }
+    let mean_sample = sum / n as f64;
+
+    // 用 PDF 独立积分
+    let mean_theory = integrate_hemisphere(|m| m.z * beckmann::pdf_ndf(m, alpha));
+
+    let err = (mean_sample - mean_theory).abs() / mean_theory;
+    assert!(
+        err < 0.01,
+        "E[cosθ] sample={mean_sample:.4} theory={mean_theory:.4} err={err:.4}"
+    );
 }

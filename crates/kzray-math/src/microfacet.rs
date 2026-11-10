@@ -137,16 +137,17 @@ pub mod ggx {
 pub mod beckmann {
     use super::*;
 
+    #[inline]
     pub fn d(cos_m: f32, alpha: f32) -> f32 {
-        if cos_m <= 0.0 { return 0.0; }
+        if cos_m <= 0.0 {
+            return 0.0;
+        }
         let c2 = cos_m * cos_m;
         let tan2 = (1.0 - c2) / c2;
         let a2 = alpha * alpha;
         (-tan2 / a2).exp() / (PI * a2 * c2 * c2)
     }
 
-    /// Smith Λ（Beckmann）。
-    /// `Λ(ω) = (erf(a) - 1)/2 + exp(-a²)/(2·a·√π)`，其中 `a = 1/(α·tanθ)`。
     #[inline]
     fn lambda(cos_v: f32, alpha: f32) -> f32 {
         if cos_v <= 0.0 {
@@ -162,12 +163,14 @@ pub mod beckmann {
         (erf_a - 1.0) * 0.5 + (-a * a).exp() / (2.0 * a * PI.sqrt()).max(1e-9)
     }
 
-
-
     #[inline]
     pub fn g1(cos_v: f32, alpha: f32) -> f32 {
-        if cos_v <= 0.0 { return 0.0; }
-        if cos_v >= 1.0 { return 1.0; }
+        if cos_v <= 0.0 {
+            return 0.0;
+        }
+        if cos_v >= 1.0 {
+            return 1.0;
+        }
         1.0 / (1.0 + lambda(cos_v, alpha))
     }
 
@@ -184,59 +187,42 @@ pub mod beckmann {
         1.0 / (1.0 + lo + li)
     }
 
-    /// 可见法线采样（Beckmann）。返回半向量 `m`（局部空间，归一化）。
+    /// **NDF 采样**（不是 VNDF）。从 `D(m)·cosθ_m` 采样微表面法线 `m`。
     ///
-    /// 采样公式：先采样斜率 `(mx, my)`，再归一化。
-    /// `m = (-mx·α, -my·α, 1).normalize()`
-    pub fn sample_vndf(wo: Vec3, alpha: f32, u1: f32, u2: f32) -> Vec3 {
-        // 采样标准 Beckmann 斜率（vis-normal 变体）
-        let phi = 2.0 * PI * u1;
-        let (tan_theta, cos_theta) = sample_slope(wo.z, alpha, u2);
-
-        let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
-        let m = Vec3::new(
-            -sin_theta * phi.cos(),
-            -sin_theta * phi.sin(),
-            cos_theta,
-        );
-        m.normalize()
-    }
-
-    /// 采样 Beckmann 斜率。返回 `(tanθ_m, cosθ_m)`。
-    /// `u` 是均匀随机数，`cos_v` 是 `wo.z`。
-    fn sample_slope(cos_v: f32, alpha: f32, u: f32) -> (f32, f32) {
-        // 简化的 Beckmann 采样：直接采样 NDF 斜率
-        let tan2 = -alpha * alpha * (1.0 - u).ln();
-        let tan_theta = tan2.max(0.0).sqrt();
+    /// 公式：`tan²θ = -α²·ln(1-u1)`，`φ = 2π·u2`。
+    ///
+    /// **这不是可见法线采样**。采样的 `m` 可能不可见（`wo·m < 0`），
+    /// 下游 BSDF 必须检查 `wo·m > 0`，无效样本返回零贡献。
+    ///
+    /// Beckmann 没有解析的 VNDF 采样（需要 `erfinv` 或 rejection sampling），
+    /// 这是 PBRT-v3、Cycles、Mitsuba 早期版本共用的近似。
+    #[inline]
+    pub fn sample_ndf(alpha: f32, u1: f32, u2: f32) -> Vec3 {
+        let phi = 2.0 * PI * u2;
+        let tan2 = -alpha * alpha * (1.0 - u1).max(1e-12).ln();
         let cos_theta = 1.0 / (1.0 + tan2).sqrt();
-        (tan_theta, cos_theta)
+        let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
+        Vec3::new(sin_theta * phi.cos(), sin_theta * phi.sin(), cos_theta)
     }
 
-    /// VNDF PDF。
-    pub fn pdf_vndf(wo: Vec3, m: Vec3, alpha: f32) -> f32 {
-        if wo.z <= 0.0 || m.z <= 0.0 {
+    /// NDF 采样 `sample_ndf` 的 PDF：`p(m) = D(m)·cosθ_m`。
+    #[inline]
+    pub fn pdf_ndf(m: Vec3, alpha: f32) -> f32 {
+        if m.z <= 0.0 {
             return 0.0;
         }
-        let cos_om = wo.dot(m);
-        if cos_om <= 0.0 {
-            return 0.0;
-        }
-        let d = d(m.z, alpha);
-        let g1 = g1(wo.z, alpha);
-        d * g1 * cos_om / wo.z
+        d(m.z, alpha) * m.z
     }
 
-    /// `erf` 的 Abramowitz & Stegun 7.1.26 近似。精度 ~1.5e-7。
     fn erf_approx(x: f32) -> f32 {
         let sign = x.signum();
         let x = x.abs();
         let t = 1.0 / (1.0 + 0.3275911 * x);
-        let y = 1.0 - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t
-            - 0.284496736)
-            * t
-            + 0.254829592)
-            * t
-            * (-x * x).exp();
+        let y = 1.0
+            - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
+                + 0.254829592)
+                * t
+                * (-x * x).exp();
         sign * y
     }
 }
