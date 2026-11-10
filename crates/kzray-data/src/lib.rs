@@ -10,6 +10,11 @@
 //! - `geometry`：几何数据（attribute / mesh）
 //! - `shading`：材质（material，本质是对 BSDF Field 的引用）
 //! - `light` / `camera` / `world` / `config` / `input` / `task`：阶段 2 后续实现
+//!
+//! 序列化:
+//! **协议铁律**：`Serialize` / `Deserialize` 的结构体不得使用
+//! `#[serde(skip_serializing_if)]`。bincode 是非自描述格式，字段省略会导致
+//! 反序列化字节错位（`UnexpectedEof`）。字段永远序列化，空值用 0 / 空 Vec。
 
 pub mod camera;
 pub mod common;
@@ -24,8 +29,8 @@ pub mod world;
 // ── common 重导出 ──
 
 pub use common::{
-    DataError, EntityId, FieldExpr, FieldId, GeometryRef, IdMap, LightRef, MaterialRef, Node,
-    NodeId, NodeInput, NodeOutput, Rect, TextureId, Transform, Value, VolumeRef,
+    DataError, EntityId, FieldExpr, FieldId, GeometryRef, HasMeta, IdMap, LightRef, MaterialRef,
+    Meta, Node, NodeId, NodeInput, NodeOutput, Param, Rect, TextureId, Transform, Value, VolumeRef,
 };
 
 // ── geometry 重导出 ──
