@@ -1,0 +1,10 @@
+[package]
+name = "kzray-data"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+glam.workspace = true
+serde.workspace = true
+bincode.workspace = true
+thiserror ="1"

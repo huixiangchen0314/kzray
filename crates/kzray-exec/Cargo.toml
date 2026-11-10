@@ -1,0 +1,12 @@
+[package]
+name = "kzray-exec"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+kzray-data = { path = "../kzray-data" }
+glam.workspace = true
+serde.workspace = true
+bincode.workspace = true
+rayon.workspace = true
+rand_pcg.workspace = true
