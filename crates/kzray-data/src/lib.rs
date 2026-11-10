@@ -29,7 +29,7 @@ pub mod volume;
 // ── common 重导出 ──
 
 pub use common::{
-    DataError, EntityId, FieldExpr, FieldId, GeometryRef, HasMeta, IdMap, LightRef, MaterialRef,
+    DataError, EntityId, FieldExpr, FieldId, MeshRef, HasMeta, IdMap, LightRef, MaterialRef,
     Meta, Node, NodeId, NodeInput, NodeOutput, Param, Rect, TextureId, Transform, Value, VolumeRef,
 };
 pub use volume::{VolumeBounds, VolumeData, VolumeInstance};

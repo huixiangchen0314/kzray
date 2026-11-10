@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::CameraData;
 use crate::common::{
-    DataError, FieldExpr, FieldId, GeometryRef, LightRef, MaterialRef, Node, NodeId, 
+    DataError, FieldExpr, FieldId, MeshRef, LightRef, MaterialRef, Node, NodeId, 
     Param, VolumeRef,
 };
 use crate::config::RenderConfig;
@@ -23,7 +23,7 @@ pub struct RenderInput {
     pub fields: BTreeMap<FieldId, FieldExpr>,
     pub nodes: BTreeMap<NodeId, Node>,
     pub materials: BTreeMap<MaterialRef, Material>,
-    pub geometries: BTreeMap<GeometryRef, Mesh>,
+    pub meshes: BTreeMap<MeshRef, Mesh>,
     pub instances: Vec<RenderInstance>,
     pub lights: BTreeMap<LightRef, LightData>,
     pub volumes: BTreeMap<VolumeRef, VolumeInstance>,
@@ -38,7 +38,7 @@ impl RenderInput {
             fields: BTreeMap::new(),
             nodes: BTreeMap::new(),
             materials: BTreeMap::new(),
-            geometries: BTreeMap::new(),
+            meshes: BTreeMap::new(),
             instances: Vec::new(),
             lights: BTreeMap::new(),
             volumes: BTreeMap::new(),
@@ -50,7 +50,7 @@ impl RenderInput {
 
     pub fn validate(&self) -> Result<(), DataError> {
         // 1. 数据本身
-        for (id, geom) in &self.geometries {
+        for (id, geom) in &self.meshes {
             geom.validate().map_err(|e| DataError::InvalidParam {
                 path: format!("geometry[{id:?}]"),
                 reason: e,
@@ -129,7 +129,7 @@ impl RenderInput {
 
         // 5. 实例的 geometry / material 引用可达
         for (i, inst) in self.instances.iter().enumerate() {
-            if !self.geometries.contains_key(&inst.geometry) {
+            if !self.meshes.contains_key(&inst.geometry) {
                 return Err(DataError::InvalidParam {
                     path: format!("instance[{i}].geometry"),
                     reason: format!("引用的几何 {:?} 不存在", inst.geometry),
@@ -148,7 +148,7 @@ impl RenderInput {
         // 6. 体积的 MeshEnvelope 引用可达
         for (id, vol) in &self.volumes {
             if let crate::volume::VolumeBounds::MeshEnvelope(g) = &vol.bounds {
-                if !self.geometries.contains_key(g) {
+                if !self.meshes.contains_key(g) {
                     return Err(DataError::InvalidParam {
                         path: format!("volume[{id:?}].bounds"),
                         reason: format!("引用的几何 {g:?} 不存在"),

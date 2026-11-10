@@ -13,7 +13,7 @@ pub mod value;
 pub use error::DataError;
 pub use field::{FieldExpr, FieldId};
 pub use id::{
-    EntityId, GeometryRef, IdMap, LightRef, MaterialRef,  VolumeRef, NodeId, TextureId, 
+    EntityId, MeshRef, IdMap, LightRef, MaterialRef,  VolumeRef, NodeId, TextureId, 
 };
 pub use meta::{HasMeta, Meta};
 pub use node::{Node, NodeInput, NodeOutput};

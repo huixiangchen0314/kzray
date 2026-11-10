@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::common::meta::HasMeta;
-use crate::common::{FieldId, GeometryRef, MaterialRef, Meta, Transform};
+use crate::common::{FieldId, MeshRef, MaterialRef, Meta, Transform};
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct VisibilityFlags {
@@ -28,7 +28,7 @@ impl Default for VisibilityFlags {
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct RenderInstance {
-    pub geometry: GeometryRef,
+    pub geometry: MeshRef,
     pub material_refs: Vec<MaterialRef>,
     pub world_transform: Transform,
     /// 置换：`f(uv) -> height`。挂实例级（同一 mesh 不同实例可不同置换）。

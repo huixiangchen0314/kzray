@@ -41,7 +41,7 @@ macro_rules! typed_ref {
 }
 
 // 数据表 key 类型：既是类型，也是对应表的 key
-typed_ref!(GeometryRef, "指向 `RenderInput.geometries` 的 key。");
+typed_ref!(MeshRef, "指向 `RenderInput.geometries` 的 key。");
 typed_ref!(MaterialRef, "指向 `RenderInput.materials` 的 key。");
 typed_ref!(LightRef,    "指向 `RenderInput.lights` 的 key。");
 typed_ref!(FieldId,     "指向 `RenderInput.fields` 的 key。");

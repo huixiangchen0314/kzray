@@ -6,7 +6,7 @@ use std::collections::BTreeMap;
 
 use kzray_data::camera::{CameraData, CameraProjection, PerspectiveCamera};
 use kzray_data::common::{
-    EntityId, FieldExpr, FieldId, GeometryRef, HasMeta, LightRef, MaterialRef, Meta, Node, NodeId,
+    EntityId, FieldExpr, FieldId, MeshRef, HasMeta, LightRef, MaterialRef, Meta, Node, NodeId,
     NodeInput, NodeOutput, Param, Transform, VolumeRef,
 };
 use kzray_data::config::{
@@ -86,7 +86,7 @@ fn empty_input_roundtrip_and_validates() {
 #[test]
 fn input_with_quad_mesh_roundtrip() {
     let mut input = empty_input();
-    let geom_ref = GeometryRef(EntityId::from_name("quad"));
+    let geom_ref = MeshRef(EntityId::from_name("quad"));
 
     let mut v_attrs = BTreeMap::new();
     v_attrs.insert(
@@ -101,7 +101,7 @@ fn input_with_quad_mesh_roundtrip() {
             ],
         ),
     );
-    input.geometries.insert(
+    input.meshes.insert(
         geom_ref,
         Mesh {
             vertex_attributes: v_attrs,
@@ -123,7 +123,7 @@ fn input_with_quad_mesh_roundtrip() {
 fn missing_geometry_reference_fails() {
     let mut input = empty_input();
     input.instances.push(RenderInstance {
-        geometry: GeometryRef(EntityId::from_name("missing")),
+        geometry: MeshRef(EntityId::from_name("missing")),
         material_refs: vec![],
         world_transform: Transform::IDENTITY,
         displacement: None,
@@ -136,8 +136,8 @@ fn missing_geometry_reference_fails() {
 #[test]
 fn missing_material_reference_fails() {
     let mut input = empty_input();
-    let geom_ref = GeometryRef(EntityId::from_name("quad"));
-    input.geometries.insert(geom_ref, Mesh::default());
+    let geom_ref = MeshRef(EntityId::from_name("quad"));
+    input.meshes.insert(geom_ref, Mesh::default());
     input.instances.push(RenderInstance {
         geometry: geom_ref,
         material_refs: vec![MaterialRef(EntityId::from_name("nope"))],
@@ -165,8 +165,8 @@ fn missing_field_in_material_fails() {
 #[test]
 fn missing_displacement_field_fails() {
     let mut input = empty_input();
-    let geom_ref = GeometryRef(EntityId::from_name("g"));
-    input.geometries.insert(geom_ref, Mesh::default());
+    let geom_ref = MeshRef(EntityId::from_name("g"));
+    input.meshes.insert(geom_ref, Mesh::default());
     input.instances.push(RenderInstance {
         geometry: geom_ref,
         material_refs: vec![],
@@ -332,8 +332,8 @@ fn node_graph_shared_upstream_ok() {
 fn valid_scene_with_material_and_light() {
     let mut input = empty_input();
 
-    let geom_ref = GeometryRef(EntityId::from_name("quad"));
-    input.geometries.insert(geom_ref, Mesh::default());
+    let geom_ref = MeshRef(EntityId::from_name("quad"));
+    input.meshes.insert(geom_ref, Mesh::default());
 
     let bsdf_node = NodeId(EntityId::from_name("bsdf"));
     input.nodes.insert(
@@ -416,7 +416,7 @@ fn volume_mesh_envelope_missing_geometry_fails() {
         VolumeRef(EntityId::from_name("v")),
         VolumeInstance::new(
             VolumeData::new("homogeneous"),
-            VolumeBounds::MeshEnvelope(GeometryRef(EntityId::from_name("missing"))),
+            VolumeBounds::MeshEnvelope(MeshRef(EntityId::from_name("missing"))),
         ),
     );
     assert!(input.validate().is_err());
@@ -425,8 +425,8 @@ fn volume_mesh_envelope_missing_geometry_fails() {
 #[test]
 fn volume_mesh_envelope_with_existing_geometry_ok() {
     let mut input = empty_input();
-    let geom_ref = GeometryRef(EntityId::from_name("volume_shape"));
-    input.geometries.insert(geom_ref, Mesh::default());
+    let geom_ref = MeshRef(EntityId::from_name("volume_shape"));
+    input.meshes.insert(geom_ref, Mesh::default());
     input.volumes.insert(
         VolumeRef(EntityId::from_name("v")),
         VolumeInstance::new(
@@ -477,11 +477,11 @@ fn volume_field_reference_ok() {
 #[test]
 fn invalid_mesh_fails() {
     let mut input = empty_input();
-    let geom_ref = GeometryRef(EntityId::from_name("bad_mesh"));
+    let geom_ref = MeshRef(EntityId::from_name("bad_mesh"));
     // 空索引但属性数量对不上
     let mut attrs = BTreeMap::new();
     attrs.insert("position".to_string(), AttributeBuffer::f32(3, vec![0.0; 6])); // 2 个顶点
-    input.geometries.insert(
+    input.meshes.insert(
         geom_ref,
         Mesh {
             vertex_attributes: attrs,

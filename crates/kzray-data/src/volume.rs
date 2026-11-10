@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::common::meta::HasMeta;
-use crate::common::{DataError, GeometryRef, Meta, Param, Transform};
+use crate::common::{DataError, MeshRef, Meta, Param, Transform};
 
 /// 散射模型的描述。**开放 `kind`**——物理模型（homogeneous /
 /// heterogeneous / atmosphere / 第三方）由执行层注册表解释。
@@ -83,7 +83,7 @@ pub enum VolumeBounds {
     TransformedBox { transform: Transform, half_extents: [f32; 3] },
     /// 网格包络（指向 `RenderInput.geometries` 中的 mesh）。
     /// **该 mesh 的拓扑用于边界判定，不参与表面着色**。
-    MeshEnvelope(GeometryRef),
+    MeshEnvelope(MeshRef),
 }
 
 impl VolumeBounds {
