@@ -32,7 +32,7 @@ fn minimal_render_config() -> RenderConfig {
         integrator: IntegratorConfig::default(),
         channels: vec![RenderChannelDesc {
             name: "beauty".into(),
-            data_type: ChannelDataType::Color,
+            data_type: ChannelDataType::Rgb,
             sample_mode: ChannelSampleMode::PerSample,
         }],
         film: FilmConfig {

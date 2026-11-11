@@ -35,7 +35,7 @@ pub struct FilmConfig {
     pub filter_width: f32,
     /// 曝光（可能与帧/时间相关，所以用 `Param`）。
     pub exposure: Param,
-    /// 颜色空间名（`"srgb"` / `"linear"` / `"acescg"`）。开放字符串，
+    /// 颜色空间名（`"srgb"` / `"rgb"` / `"acescg"`）。开放字符串，
     /// 由执行层解释。
     pub color_space: String,
 }
@@ -58,13 +58,13 @@ pub struct RenderChannelDesc {
 
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ChannelDataType {
-    /// RGB 三通道浮点。
-    Color,
+    /// FP32 线性RGB
+    Rgb,
     /// 三维向量（法线、位置等）。
     Vector,
     /// 单通道标量（深度、ID、遮罩）。
     Scalar,
-    /// 整数 ID。
+    /// i64 ID。
     Id,
 }
 

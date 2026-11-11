@@ -20,15 +20,25 @@ use super::instance::RenderInstance;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct RenderInput {
+    /// 场
     pub fields: BTreeMap<FieldId, FieldExpr>,
+    /// 节点图根节点
     pub nodes: BTreeMap<NodeId, Node>,
+    /// 材质
     pub materials: BTreeMap<MaterialRef, Material>,
+    /// 网格
     pub meshes: BTreeMap<MeshRef, Mesh>,
+    /// 渲染实例
     pub instances: Vec<RenderInstance>,
+    /// 灯光
     pub lights: BTreeMap<LightRef, LightData>,
+    /// 体积
     pub volumes: BTreeMap<VolumeRef, VolumeInstance>,
+    /// 相机配置
     pub camera: CameraData,
+    /// 世界配置
     pub world: WorldData,
+    /// 渲染配置
     pub render: RenderConfig,
 }
 
