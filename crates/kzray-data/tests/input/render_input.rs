@@ -6,8 +6,8 @@ use std::collections::BTreeMap;
 
 use kzray_data::camera::{CameraData, CameraProjection, PerspectiveCamera};
 use kzray_data::common::{
-    EntityId, FieldExpr, FieldId, MeshRef, HasMeta, LightRef, MaterialRef, Meta, Node, NodeId,
-    NodeInput, NodeOutput, Param, Transform, VolumeRef,
+    EntityId, FieldExpr, FieldId, MeshId, HasMeta, LightId, MaterialId, Meta, Node, NodeId,
+    NodeInput, NodeOutput, Param, Transform, VolumeId,
 };
 use kzray_data::config::{
     ChannelDataType, ChannelSampleMode, FilmConfig, FilterType, IntegratorConfig,
@@ -86,7 +86,7 @@ fn empty_input_roundtrip_and_validates() {
 #[test]
 fn input_with_quad_mesh_roundtrip() {
     let mut input = empty_input();
-    let geom_ref = MeshRef(EntityId::from_name("quad"));
+    let geom_ref = MeshId(EntityId::from_name("quad"));
 
     let mut v_attrs = BTreeMap::new();
     v_attrs.insert(
@@ -123,7 +123,7 @@ fn input_with_quad_mesh_roundtrip() {
 fn missing_geometry_reference_fails() {
     let mut input = empty_input();
     input.instances.push(RenderInstance {
-        geometry: MeshRef(EntityId::from_name("missing")),
+        geometry: MeshId(EntityId::from_name("missing")),
         material_refs: vec![],
         world_transform: Transform::IDENTITY,
         displacement: None,
@@ -136,11 +136,11 @@ fn missing_geometry_reference_fails() {
 #[test]
 fn missing_material_reference_fails() {
     let mut input = empty_input();
-    let geom_ref = MeshRef(EntityId::from_name("quad"));
+    let geom_ref = MeshId(EntityId::from_name("quad"));
     input.meshes.insert(geom_ref, Mesh::default());
     input.instances.push(RenderInstance {
         geometry: geom_ref,
-        material_refs: vec![MaterialRef(EntityId::from_name("nope"))],
+        material_refs: vec![MaterialId(EntityId::from_name("nope"))],
         world_transform: Transform::IDENTITY,
         displacement: None,
         visibility: VisibilityFlags::default(),
@@ -152,7 +152,7 @@ fn missing_material_reference_fails() {
 #[test]
 fn missing_field_in_material_fails() {
     let mut input = empty_input();
-    let mat_ref = MaterialRef(EntityId::from_name("m"));
+    let mat_ref = MaterialId(EntityId::from_name("m"));
     input.materials.insert(
         mat_ref,
         Material {
@@ -165,7 +165,7 @@ fn missing_field_in_material_fails() {
 #[test]
 fn missing_displacement_field_fails() {
     let mut input = empty_input();
-    let geom_ref = MeshRef(EntityId::from_name("g"));
+    let geom_ref = MeshId(EntityId::from_name("g"));
     input.meshes.insert(geom_ref, Mesh::default());
     input.instances.push(RenderInstance {
         geometry: geom_ref,
@@ -181,7 +181,7 @@ fn missing_displacement_field_fails() {
 #[test]
 fn missing_field_in_light_fails() {
     let mut input = empty_input();
-    let light_ref = LightRef(EntityId::from_name("l"));
+    let light_ref = LightId(EntityId::from_name("l"));
     input.lights.insert(
         light_ref,
         LightData::new(LightType::Point(PointLight {
@@ -332,7 +332,7 @@ fn node_graph_shared_upstream_ok() {
 fn valid_scene_with_material_and_light() {
     let mut input = empty_input();
 
-    let geom_ref = MeshRef(EntityId::from_name("quad"));
+    let geom_ref = MeshId(EntityId::from_name("quad"));
     input.meshes.insert(geom_ref, Mesh::default());
 
     let bsdf_node = NodeId(EntityId::from_name("bsdf"));
@@ -348,7 +348,7 @@ fn valid_scene_with_material_and_light() {
         FieldExpr::NodeOutput(NodeOutput::new(bsdf_node, "bsdf")),
     );
 
-    let mat_ref = MaterialRef(EntityId::from_name("mat_red"));
+    let mat_ref = MaterialId(EntityId::from_name("mat_red"));
     input
         .materials
         .insert(mat_ref, Material { bsdf: bsdf_field });
@@ -362,7 +362,7 @@ fn valid_scene_with_material_and_light() {
         meta: Meta::new(),
     });
 
-    let light_ref = LightRef(EntityId::from_name("key_light"));
+    let light_ref = LightId(EntityId::from_name("key_light"));
     input.lights.insert(
         light_ref,
         LightData::new(LightType::Point(PointLight {
@@ -383,7 +383,7 @@ fn volumes_independent_from_world() {
     let mut input = empty_input();
 
     // 全局雾
-    let fog_ref = VolumeRef(EntityId::from_name("global_fog"));
+    let fog_ref = VolumeId(EntityId::from_name("global_fog"));
     input.volumes.insert(
         fog_ref,
         VolumeInstance::new(
@@ -393,7 +393,7 @@ fn volumes_independent_from_world() {
     );
 
     // 局部烟
-    let smoke_ref = VolumeRef(EntityId::from_name("smoke"));
+    let smoke_ref = VolumeId(EntityId::from_name("smoke"));
     let mut smoke = VolumeInstance::new(
         VolumeData::new("heterogeneous").with_param("density", Param::from_f32(0.5)),
         VolumeBounds::Aabb {
@@ -413,10 +413,10 @@ fn volumes_independent_from_world() {
 fn volume_mesh_envelope_missing_geometry_fails() {
     let mut input = empty_input();
     input.volumes.insert(
-        VolumeRef(EntityId::from_name("v")),
+        VolumeId(EntityId::from_name("v")),
         VolumeInstance::new(
             VolumeData::new("homogeneous"),
-            VolumeBounds::MeshEnvelope(MeshRef(EntityId::from_name("missing"))),
+            VolumeBounds::MeshEnvelope(MeshId(EntityId::from_name("missing"))),
         ),
     );
     assert!(input.validate().is_err());
@@ -425,10 +425,10 @@ fn volume_mesh_envelope_missing_geometry_fails() {
 #[test]
 fn volume_mesh_envelope_with_existing_geometry_ok() {
     let mut input = empty_input();
-    let geom_ref = MeshRef(EntityId::from_name("volume_shape"));
+    let geom_ref = MeshId(EntityId::from_name("volume_shape"));
     input.meshes.insert(geom_ref, Mesh::default());
     input.volumes.insert(
-        VolumeRef(EntityId::from_name("v")),
+        VolumeId(EntityId::from_name("v")),
         VolumeInstance::new(
             VolumeData::new("homogeneous"),
             VolumeBounds::MeshEnvelope(geom_ref),
@@ -441,7 +441,7 @@ fn volume_mesh_envelope_with_existing_geometry_ok() {
 fn volume_field_reference_missing_fails() {
     let mut input = empty_input();
     input.volumes.insert(
-        VolumeRef(EntityId::from_name("v")),
+        VolumeId(EntityId::from_name("v")),
         VolumeInstance::new(
             VolumeData::new("heterogeneous").with_param(
                 "density",
@@ -462,7 +462,7 @@ fn volume_field_reference_ok() {
         FieldExpr::Constant(kzray_data::common::Value::Float(0.5)),
     );
     input.volumes.insert(
-        VolumeRef(EntityId::from_name("v")),
+        VolumeId(EntityId::from_name("v")),
         VolumeInstance::new(
             VolumeData::new("heterogeneous").with_param("density", Param::Field(density_field)),
             VolumeBounds::Infinite,
@@ -477,7 +477,7 @@ fn volume_field_reference_ok() {
 #[test]
 fn invalid_mesh_fails() {
     let mut input = empty_input();
-    let geom_ref = MeshRef(EntityId::from_name("bad_mesh"));
+    let geom_ref = MeshId(EntityId::from_name("bad_mesh"));
     // 空索引但属性数量对不上
     let mut attrs = BTreeMap::new();
     attrs.insert("position".to_string(), AttributeBuffer::f32(3, vec![0.0; 6])); // 2 个顶点
@@ -499,7 +499,7 @@ fn invalid_mesh_fails() {
 fn nan_in_light_fails() {
     let mut input = empty_input();
     input.lights.insert(
-        LightRef(EntityId::from_name("l")),
+        LightId(EntityId::from_name("l")),
         LightData::new(LightType::Point(PointLight {
             position: [0.0, 0.0, 0.0],
             intensity: Param::from_f32(f32::NAN),
@@ -513,7 +513,7 @@ fn nan_in_light_fails() {
 fn nan_in_volume_fails() {
     let mut input = empty_input();
     input.volumes.insert(
-        VolumeRef(EntityId::from_name("v")),
+        VolumeId(EntityId::from_name("v")),
         VolumeInstance::new(
             VolumeData::new("homogeneous").with_param("density", Param::from_f32(f32::NAN)),
             VolumeBounds::Infinite,

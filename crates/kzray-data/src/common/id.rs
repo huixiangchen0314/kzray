@@ -41,12 +41,14 @@ macro_rules! typed_ref {
 }
 
 // 数据表 key 类型：既是类型，也是对应表的 key
-typed_ref!(MeshRef, "指向 `RenderInput.meshes` 的 key。");
-typed_ref!(MaterialRef, "指向 `RenderInput.materials` 的 key。");
-typed_ref!(LightRef,    "指向 `RenderInput.lights` 的 key。");
+
+typed_ref!(InstanceId, "渲染实例的唯一标识");
+typed_ref!(MeshId, "指向 `RenderInput.meshes` 的 key。");
+typed_ref!(MaterialId, "指向 `RenderInput.materials` 的 key。");
+typed_ref!(LightId,    "指向 `RenderInput.lights` 的 key。");
 typed_ref!(FieldId,     "指向 `RenderInput.fields` 的 key。");
 typed_ref!(NodeId,      "指向 `RenderInput.nodes` 的 key。");
-typed_ref!(VolumeRef, "指向 `RenderInput.volumes` 的 key。");
+typed_ref!(VolumeId, "指向 `RenderInput.volumes` 的 key。");
 
 // 非表引用：外部资源 id，不指向 `RenderInput` 中的任何表
 typed_ref!(TextureId, "外部 bitmap 纹理资源 id（磁盘文件 / 外部 asset）。");

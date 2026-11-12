@@ -1,6 +1,6 @@
 //! 对应 `src/volume.rs`。
 
-use kzray_data::common::{EntityId, FieldId, MeshRef, HasMeta, Meta, Param, Transform};
+use kzray_data::common::{EntityId, FieldId, MeshId, HasMeta, Meta, Param, Transform};
 use kzray_data::volume::{VolumeBounds, VolumeData, VolumeInstance};
 
 fn roundtrip<T>(v: &T) -> Vec<u8>
@@ -60,7 +60,7 @@ fn bounds_transformed_box() {
 
 #[test]
 fn bounds_mesh_envelope() {
-    let b = VolumeBounds::MeshEnvelope(MeshRef(EntityId::from_name("smoke_mesh")));
+    let b = VolumeBounds::MeshEnvelope(MeshId(EntityId::from_name("smoke_mesh")));
     assert!(b.validate("x").is_ok());
     roundtrip(&b);
 }

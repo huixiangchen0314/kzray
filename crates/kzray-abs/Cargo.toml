@@ -5,8 +5,7 @@ edition.workspace = true
 
 [dependencies]
 kzray-data = { path = "../kzray-data" }
-glam.workspace = true
-serde.workspace = true
-bincode.workspace = true
-rayon.workspace = true
+kzray-math = { path = "../kzray-math" }
 rand_pcg.workspace = true
+glam.workspace = true
+thiserror = "1"

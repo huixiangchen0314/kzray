@@ -6,8 +6,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera::CameraData;
 use crate::common::{
-    DataError, FieldExpr, FieldId, MeshRef, LightRef, MaterialRef, Node, NodeId, 
-    Param, VolumeRef,
+    DataError, FieldExpr, FieldId, MeshId, LightId, MaterialId, Node, NodeId, 
+    Param, VolumeId,
 };
 use crate::config::RenderConfig;
 use crate::geometry::Mesh;
@@ -25,15 +25,15 @@ pub struct RenderInput {
     /// 节点图根节点
     pub nodes: BTreeMap<NodeId, Node>,
     /// 材质
-    pub materials: BTreeMap<MaterialRef, Material>,
+    pub materials: BTreeMap<MaterialId, Material>,
     /// 网格
-    pub meshes: BTreeMap<MeshRef, Mesh>,
+    pub meshes: BTreeMap<MeshId, Mesh>,
     /// 渲染实例
     pub instances: Vec<RenderInstance>,
     /// 灯光
-    pub lights: BTreeMap<LightRef, LightData>,
+    pub lights: BTreeMap<LightId, LightData>,
     /// 体积
-    pub volumes: BTreeMap<VolumeRef, VolumeInstance>,
+    pub volumes: BTreeMap<VolumeId, VolumeInstance>,
     /// 相机配置
     pub camera: CameraData,
     /// 世界配置
@@ -183,7 +183,7 @@ impl RenderInput {
         Ok(())
     }
 
-    fn check_light_field_refs(&self, light: &LightData, id: &LightRef) -> Result<(), DataError> {
+    fn check_light_field_refs(&self, light: &LightData, id: &LightId) -> Result<(), DataError> {
         let mut ids = Vec::new();
         collect_light_param_fields(light, &mut ids);
         for f in ids {

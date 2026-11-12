@@ -17,5 +17,6 @@ glam = "0.29"
 serde = { version = "1", features = ["derive"] }
 bincode = "1.3"
 rayon = "1.10"
-rand_pcg = "0.3"
+rand = "0.10"          
+rand_pcg = "0.10"
 thiserror = "1"

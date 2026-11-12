@@ -4,9 +4,12 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-kzray-data = { path = "../kzray-data" }
+kzray-math = {path = "../kzray-math"} # 基础数学
+kzray-data = { path = "../kzray-data" } # 数据层
+kzray-abs = {path ="../kzray-abs"} # 抽象层
 glam.workspace = true
 serde.workspace = true
 bincode.workspace = true
 rayon.workspace = true
+rand.workspace = true
 rand_pcg.workspace = true

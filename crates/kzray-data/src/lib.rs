@@ -29,8 +29,9 @@ pub mod volume;
 // ── common 重导出 ──
 
 pub use common::{
-    DataError, EntityId, FieldExpr, FieldId, MeshRef, HasMeta, IdMap, LightRef, MaterialRef,
-    Meta, Node, NodeId, NodeInput, NodeOutput, Param, Rect, TextureId, Transform, Value, VolumeRef,
+    DataError, EntityId, FieldExpr, FieldId, MeshId, HasMeta, IdMap, LightId, MaterialId,
+    Meta, Node, NodeId, NodeInput, NodeOutput, Param, Rect, TextureId, Transform, Value, VolumeId,
+    InstanceId,
 };
 pub use volume::{VolumeBounds, VolumeData, VolumeInstance};
 pub use world::WorldData;

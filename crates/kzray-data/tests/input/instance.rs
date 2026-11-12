@@ -1,7 +1,7 @@
 //! 对应 `src/input/instance.rs`。
 
 use kzray_data::common::{
-    EntityId, FieldId, MeshRef, HasMeta, MaterialRef, Meta, Param, Transform,
+    EntityId, FieldId, MeshId, HasMeta, MaterialId, Meta, Param, Transform,
 };
 use kzray_data::input::{RenderInstance, VisibilityFlags};
 
@@ -43,8 +43,8 @@ fn visibility_custom() {
 #[test]
 fn minimal_instance() {
     let inst = RenderInstance {
-        geometry: MeshRef(EntityId::from_name("quad")),
-        material_refs: vec![MaterialRef(EntityId::from_name("mat_red"))],
+        geometry: MeshId(EntityId::from_name("quad")),
+        material_refs: vec![MaterialId(EntityId::from_name("mat_red"))],
         world_transform: Transform::IDENTITY,
         displacement: None,
         visibility: VisibilityFlags::default(),
@@ -56,8 +56,8 @@ fn minimal_instance() {
 #[test]
 fn instance_with_displacement() {
     let inst = RenderInstance {
-        geometry: MeshRef(EntityId::from_name("sphere")),
-        material_refs: vec![MaterialRef(EntityId::from_name("mat_glass"))],
+        geometry: MeshId(EntityId::from_name("sphere")),
+        material_refs: vec![MaterialId(EntityId::from_name("mat_glass"))],
         world_transform: Transform::IDENTITY,
         displacement: Some(FieldId(EntityId::from_name("bump"))),
         visibility: VisibilityFlags::default(),
@@ -70,11 +70,11 @@ fn instance_with_displacement() {
 fn instance_with_multiple_materials() {
     // 多子网格材质：material_refs 有多个槽
     let inst = RenderInstance {
-        geometry: MeshRef(EntityId::from_name("multi_mat_mesh")),
+        geometry: MeshId(EntityId::from_name("multi_mat_mesh")),
         material_refs: vec![
-            MaterialRef(EntityId::from_name("mat_a")),
-            MaterialRef(EntityId::from_name("mat_b")),
-            MaterialRef(EntityId::from_name("mat_c")),
+            MaterialId(EntityId::from_name("mat_a")),
+            MaterialId(EntityId::from_name("mat_b")),
+            MaterialId(EntityId::from_name("mat_c")),
         ],
         world_transform: Transform::IDENTITY,
         displacement: None,
@@ -88,7 +88,7 @@ fn instance_with_multiple_materials() {
 #[test]
 fn instance_with_world_transform() {
     let inst = RenderInstance {
-        geometry: MeshRef(EntityId::from_name("box")),
+        geometry: MeshId(EntityId::from_name("box")),
         material_refs: vec![],
         world_transform: Transform::from_cols([
             [2.0, 0.0, 0.0, 0.0],
@@ -109,7 +109,7 @@ fn instance_carries_meta() {
     meta.insert("name", Param::from_str("hero_ball"));
     meta.insert("render_layer", Param::from_str("fg"));
     let inst = RenderInstance {
-        geometry: MeshRef(EntityId::from_name("sphere")),
+        geometry: MeshId(EntityId::from_name("sphere")),
         material_refs: vec![],
         world_transform: Transform::IDENTITY,
         displacement: None,
