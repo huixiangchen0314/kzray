@@ -23,6 +23,7 @@ pub mod spectrum;
 pub mod sensor;
 pub mod film;
 pub mod scene;
+pub mod integrator;
 
 // ---- 能量代数 ----
 pub use spectrum::{
@@ -45,3 +46,4 @@ pub use ray::{Ray, SurfaceHit};
 pub use film::{Film, AdaptiveFilm, FilmWithVisibleSurface};
 pub use material::{Material, BSDFBuilder, BXDFBuilder};
 pub use scene::Scene;
+pub use integrator::Integrator;

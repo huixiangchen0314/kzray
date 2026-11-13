@@ -136,6 +136,7 @@ pub trait BXDFBuilder<S: SpectralAlgebra>: Send + Sync {
 /// 封装不同类型的材质构建器。当前只有 `BSDF` 变体；未来加 BSSRDF 时
 /// 新增变体，`Scene::material` 的签名不变——这是用枚举而非
 /// `&dyn BSDFBuilder` 的原因。
+/// 材质枚举 = 方程项的结构种类
 ///
 /// # 内部持有 `Arc`
 ///
