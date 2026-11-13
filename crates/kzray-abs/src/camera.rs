@@ -215,7 +215,7 @@ pub trait Camera<S: SpectralAlgebra>: Send + Sync {
     /// `light_pdf × pdf_li`，BSDF 采样路径用 `BSDF::pdf`，相机路径用
     /// `pdf_wo` 反查。
     ///
-    /// 针孔相机返回 0：连续方向采样采不到 delta 方向。
+    /// 方向 delta 的相机返回 0： 连续方向采样采不到 delta 方向。
     ///
     /// 契约：对任意 `s = gen_ray(...)`，应有
     /// `pdf_wo(&s.ray) == s.pdf`（delta 相机除外）。

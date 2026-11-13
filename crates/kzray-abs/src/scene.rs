@@ -171,6 +171,7 @@ mod tests {
             &self,
             _ctx: &LightSampleContext,
             _sampler: &mut impl Sampler,
+            _dim: u32
         ) -> Option<LightSelection> {
             None
         }

@@ -1,5 +1,5 @@
 [package]
-name = "kzray-exec"
+name = "kzray-impl"
 version.workspace = true
 edition.workspace = true
 
@@ -13,3 +13,4 @@ bincode.workspace = true
 rayon.workspace = true
 rand.workspace = true
 rand_pcg.workspace = true
+rand_core.workspace = true

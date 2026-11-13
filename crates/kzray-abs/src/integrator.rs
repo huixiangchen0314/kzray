@@ -1,15 +1,15 @@
 //! 积分器契约。
 //!
 //! 积分器是渲染器的**算法核心**——给定场景、光线、采样器，计算沿光线
-//! 到达的辐射亮度。渲染方程的全部求解逻辑（路径追踪、BDPT、光子映射、
-//! MLT……）都在这一层。
+//! 到达的辐射亮度。渲染方程的全部求解逻辑（路径追踪、BDPT、光子映射）
+//! 都在这一层。
 //!
 //! # 为什么是窄接口
 //!
 //! 契约层只定义**入口**，不定义**过程**。`li` 一个方法足够：
 //!
 //! - **算法差异全在实现层**：PT 的路径状态机、BDPT 的子路径连接、
-//!   PM 的光子映射、MLT 的马尔可夫链——这些是算法，不是契约。
+//!   PM 的光子映射——这些是算法，不是契约。
 //! - **契约层不假设算法结构**：如果契约层定义 `sample_path` / `connect` /
 //!   `mnee` 之类的方法，就等于把某种算法结构强加给所有实现。
 //! - **配置是实现的属性**：最大深度、RR 阈值、光源采样策略、MIS 权重——
@@ -18,6 +18,24 @@
 //! 对比 `Light` / `BSDF` / `Camera`：它们的契约有多个方法，因为它们的
 //! 行为是**协议的多个面**（采样 / 求值 / PDF），而积分器的行为是
 //! **一个整体计算**——给定输入，返回输出，中间的算法过程不对外暴露。
+//!
+//! # 支持范围
+//!
+//! 本契约服务于"**每次调用独立**"的积分器：
+//!
+//! - 路径追踪（PT）：每次 `li` 调用追踪一条完整路径；
+//! - 双向路径追踪（BDPT）：每次 `li` 调用构造 eye subpath，内部与
+//!   light subpath 连接（light subpath 是 `li` 的内部实现，不是独立入口）；
+//! - 光子映射（PM）的辐射亮度估计：从场景点出发的光线追踪。
+//!
+//! **MLT 不直接实现本契约**。马尔可夫链需要跨调用状态（当前路径、
+//! 突变策略、接受概率），而 `li` 是 `&self`、每次调用独立的纯函数。
+//! MLT 用独立接口驱动：
+//!
+//! - `MltIntegrator::run_chain(&mut self, ...)` 维护链式状态，内部每一步
+//!   用 `Scene` / `Light` / `BSDF` 契约组件计算路径贡献；
+//! - `Integrator` 契约本身**不服务于** MLT——这是算法差异，不是契约层
+//!   的职责。文档不把 MLT 列入"本契约覆盖的算法"。
 //!
 //! # 泛型参数
 //!
@@ -29,6 +47,23 @@
 //! trait 参数，`Box<dyn Integrator<S, LS>>` 可用。这允许实现层在运行时
 //! 切换积分器（如 `--integrator pt` / `--integrator bdpt`）。
 //!
+//! # 为什么 `LS` 是泛型参数而非 `Box<dyn LightSampler>`
+//!
+//! `LightSampler::sample` 用了 `&mut impl Sampler` 换单态化，
+//! `LightSampler` 因此 **不是 dyn compatible**（`&dyn LightSampler`
+//! 不可用）。两个选择：
+//!
+//! 1. **改 `sample` 为 `&mut dyn Sampler`**：`LightSampler` 变 object-safe，
+//!    `Scene` / `Integrator` 不需要 `LS` 泛型参数。代价是 `sample` 内部的
+//!    `next_2d` / `next_f32` 走虚分派。
+//! 2. **`LS` 泛型参数**（当前选择）：保留 `LightSampler` 的完整单态化，
+//!    代价是 `Scene` / `Integrator` 多一个泛型参数。
+//!
+//! 当前选 2 是保守决策：单态化保证零开销，泛型参数的成本很低（只影响
+//! 类型签名，不影响运行时）。如果**实测**显示虚分派可忽略（每次 `sample`
+//! 内部的 2-3 次虚分派相比 BVH 遍历微不足道），可以改成方案 1——这是
+//! **可逆决策**，改签名即可，不影响其他契约。
+//!
 //! # `&dyn Scene<S, LS>` 而非 `&impl Scene<S, LS>`
 //!
 //! `Integrator` 可能被 `Box<dyn Integrator<S, LS>>` 持有（运行时切换）。
@@ -36,11 +71,27 @@
 //! ——每个 `Scene` 实现会单态化出一份 `Integrator`，`Box<dyn>` 无法表达。
 //!
 //! 代价是 `scene.intersect` / `scene.material` 等调用走虚分派。每次求交
-//! 一次虚分派，相比 BVH 遍历（O(log n) 次盒求交）可忽略。这与
-//! [`crate::scene::Scene`] 本身是 `&dyn Scene` 的取舍一致——`Scene` 的
-//! 方法不是泛型方法，所以 `Scene` 可以 dyn；`LightSampler` 的 `sample`
+//! 一次虚分派，相比 BVH 遍历（O(log n) 次盒求交）**理论上可忽略**，但
+//! **具体数字需实测**。如果 profile 显示 `scene.intersect` 的虚分派是
+//! 瓶颈，可以考虑在 `Integrator` 内部缓存热点数据（如最近的命中、当前
+//! 的材质），减少虚分派次数。
+//!
+//! 这与 [`crate::scene::Scene`] 本身是 `&dyn Scene` 的取舍一致——`Scene`
+//! 的方法不是泛型方法，所以 `Scene` 可以 dyn；`LightSampler` 的 `sample`
 //! 用了 `&mut impl Sampler`，所以 `LightSampler` 不可 dyn，通过 `LS`
 //! 泛型参数传递。
+//!
+//! # `Send + Sync` 与内部状态
+//!
+//! `Integrator` 是**配置对象**——跨线程共享，每个线程用自己的 `Sampler`
+//! 独立调用 `li`。内部**不应**有跨调用的可变状态。需要缓存的算法
+//! （光子图、预计算表）在构造期初始化（不可变），运行时只读；如果
+//! 需要运行时更新，用 `Mutex` / `RwLock` 自行承担同步成本，或使用
+//! 独立契约（如 `MltIntegrator`）。
+//!
+//! 这是"配置与状态分离"的设计——配置在积分器实例里（不可变或构造期
+//! 初始化），状态在调用栈或显式管理的容器里。`Send + Sync` 强制这个
+//! 分离，避免"看似无状态实则内部可变"的隐藏 bug。
 //!
 //! # 维度管理
 //!
@@ -56,6 +107,11 @@
 //! 具体流程见 [`crate::conventions`] 的"维度流程"文档。积分器实现负责
 //! 按这个流程推进，契约层不约束内部顺序——BDPT 的维度流程和 PT 不同，
 //! 但都遵守"追踪实际消耗"的原则。
+//!
+//! 实现层按 `conventions` 的流程推进基址。`LightSampler::max_sample_dimensions`
+//! 和 `BSDF::max_sample_dimensions` 提供失败恢复的**上界**；正常路径用
+//! `consumed` **精确追踪**。契约层不提供统一的维度查询接口——各组件
+//! 自己报告消耗是维度追踪模型的核心。
 //!
 //! # 与 `Camera` 的关系
 //!
@@ -124,17 +180,24 @@ where
     ///
     /// # 语义
     ///
-    /// - **从相机出发**（`Radiance` 传输方向）：返回的是沿 `ray.dir`
-    ///   看到的辐射亮度。PT / BDPT 的 eye subpath 用这个语义。
-    /// - **从光源出发**（`Importance` 传输方向）：BDPT 的 light subpath
-    ///   需要不同的入口——当前 `li` 只定义 `Radiance` 方向。`Importance`
-    ///   方向的子路径追踪是积分器的内部实现，不是契约层的独立方法。
-    /// - **不累加自发光**：`li` 返回的是**反射/透射后的辐射亮度**，
-    ///   不是射线直接命中的自发光。自发光由 `Light::sample_li` 或
-    ///   `InfiniteLight::emitted_radiance` 在直接光照计算中处理。
-    ///   BDPT 的端点连接会加入自发光，但那是算法内部的事。
+    /// - **从相机出发**（`Radiance` 传输方向）：返回沿 `ray.dir` 看到的
+    ///   **总辐射亮度**，**包含**自发光贡献。
+    /// - **自发光与双重计数**：实现层通过 `specular_bounce` 标志（或
+    ///   等价机制）决定何时累加自发光：
+    ///   - **第一次反弹**（`bounces == 0`）或**上一次是镜面反弹**
+    ///     （`specular_bounce == true`）：必须累加自发光——NEE 覆盖不到
+    ///     镜面方向，光源命中是唯一的贡献路径；
+    ///   - **漫反射反弹后**：跳过自发光——NEE 已采样同一光源，再累加会
+    ///     双重计数。
+    ///
+    ///   实现层负责避免双重计数。契约层不强制具体机制，但语义要求
+    ///   **镜面反射后的光源命中必须返回自发光**——否则镜面材质在无 NEE
+    ///   覆盖的方向上会丢失能量。
     /// - **不乘相机权重**：`W_e` 由相机侧处理（`CameraSample::weight`），
     ///   `li` 返回的是场景辐射亮度，调用方乘 `W_e` 得到最终贡献。
+    /// - **BDPT 的 endpoint 连接**：BDPT 在连接两端时会加入自发光和
+    ///   BSDF 贡献，这是算法内部的处理，不改变 `li` 的语义——`li` 返回
+    ///   的是"沿 ray 到达的辐射亮度"，BDPT 的连接逻辑在这个框架内计算。
     ///
     /// # 失败
     ///
@@ -147,6 +210,13 @@ where
     /// `sampler` 的维度基址由调用方设置（`start_pixel_sample`）。`li`
     /// 内部按维度追踪推进，返回后调用方不需要知道消耗了多少维度——
     /// 下一次 `li` 调用前会重新 `start_pixel_sample`。
+    ///
+    /// # 线程安全
+    ///
+    /// `li` 是 `&self`，多线程可以并行调用。实现层不应在 `li` 内部修改
+    /// `self` 的可变状态——需要缓存的算法（光子图、预计算表）在构造期
+    /// 初始化，运行时只读；需要运行时更新的状态用 `Mutex` / `RwLock`
+    /// 保护或使用独立契约（见模块文档"`Send + Sync` 与内部状态"）。
     fn li(
         &self,
         scene: &dyn Scene<S, LS>,
@@ -159,6 +229,26 @@ where
 // ═══════════════════════════════════════════════════════════════
 // 测试
 // ═══════════════════════════════════════════════════════════════
+//
+// 契约层测试只验证**接口形态**：
+//
+// - 返回值正确性（`ConstantIntegrator` / `ZeroIntegrator`）；
+// - object-safety（`Box<dyn Integrator<S, LS>>`）；
+// - `Send + Sync`；
+// - `&dyn Scene` 参数兼容性。
+//
+// **不验证**以下语义（需要在实现层用真实场景测试）：
+//
+// - **自发光语义**：需要镜面材质 + 无 NEE 的场景（如镜面天花板），
+//   验证 `li` 在镜面反弹后返回自发光。契约层无场景，无法测。
+// - **双重计数避免**：需要漫反射材质 + 光源的场景，验证 NEE 和自发光
+//   不重复累加。契约层无光源采样实现，无法测。
+// - **维度管理**：需要真实 `Sampler`（Sobol / Halton）验证维度基址
+//   推进正确。契约层的 `TestSampler` 只验证签名，不追踪维度。
+// - **能量守恒**：需要完整 PT 管线和白炉测试。契约层不涉及物理。
+//
+// 这些缺口是契约层测试的合理边界——契约验证"签名和 object-safety"，
+// 物理语义由实现层测试。
 
 #[cfg(test)]
 mod tests {
@@ -180,6 +270,7 @@ mod tests {
             &self,
             _ctx: &LightSampleContext,
             _sampler: &mut impl Sampler,
+            _dim: u32
         ) -> Option<LightSelection> {
             None
         }
@@ -230,6 +321,10 @@ mod tests {
     impl Sampler for TestSampler {
         fn next_f32(&mut self, _dimension: u32) -> f32 {
             0.5
+        }
+
+        fn start_pixel_sample(&mut self, _pixel: glam::UVec2, _sample_index: u32) {
+
         }
     }
 
@@ -320,5 +415,34 @@ mod tests {
         let mut sampler = TestSampler;
         let result = integrator.li(scene.as_ref(), &ray, &mut sampler, &NoWavelengths);
         assert_eq!(result, SpectrumRgb::new(1.0, 0.0, 0.0));
+    }
+
+    #[test]
+    fn integrator_parallel_calls() {
+        // 验证 &self 可多线程并行调用（Send + Sync 的实践含义）
+        use std::sync::Arc;
+        use std::thread;
+
+        let integrator: Arc<dyn Integrator<SpectrumRgb, EmptyLightSampler>> =
+            Arc::new(ConstantIntegrator {
+                value: SpectrumRgb::ONE,
+            });
+        let scene: Arc<dyn Scene<SpectrumRgb, EmptyLightSampler>> = Arc::new(EmptyScene);
+
+        let mut handles = vec![];
+        for _ in 0..4 {
+            let integrator = Arc::clone(&integrator);
+            let scene = Arc::clone(&scene);
+            handles.push(thread::spawn(move || {
+                let ray = Ray::new(glam::Vec3::ZERO, glam::Vec3::X, 0.0);
+                let mut sampler = TestSampler;
+                integrator.li(scene.as_ref(), &ray, &mut sampler, &NoWavelengths)
+            }));
+        }
+
+        for h in handles {
+            let result = h.join().unwrap();
+            assert_eq!(result, SpectrumRgb::ONE);
+        }
     }
 }

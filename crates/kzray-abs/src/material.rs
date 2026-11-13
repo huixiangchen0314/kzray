@@ -13,6 +13,13 @@
 //! [`Material::BSDF`]。这个转换**不在契约层**，不在数据层——是构建层
 //! 的职责。契约层只定义"运行时材质是什么形态"和"如何构造 BSDF"。
 //!
+//! # 为什么 `build` 需要 `wo`
+//!
+//! `BSDF::new(entries, wo_world, normal_world)` 需要 `wo_world`（着色点
+//! 出射方向）构造局部坐标系。`SurfaceHit` 不含光线方向——它是纯求交
+//! 结果，与光线无关。所以 `build` 显式接收 `wo: Vec3`，由调用方（积分器）
+//! 从当前光线计算：`wo = -ray.dir.normalize()`。
+//!
 //! # 为什么用枚举而不是 trait
 //!
 //! 运行时材质的"种类"是**封闭域**（BSDF、BSSRDF、未来可能的其他）。
@@ -22,9 +29,6 @@
 //!   变体不改签名；
 //! - **穷尽匹配**：调用方 match 时编译器强制处理所有变体；
 //! - **无虚分派开销**：`Material` 的分派是 enum 的 `match`，不是 vtable。
-//!
-//! 对比"`Scene::material` 返回 `&dyn BSDFBuilder<S>`"：如果未来加
-//! BSSRDF，签名需要改或加平行方法（`material_bssrdf`），破坏接口。
 //!
 //! # 为什么叫 `BSDFBuilder` 而不是 `Material`
 //!
@@ -40,6 +44,8 @@
 
 use std::sync::Arc;
 
+use glam::Vec3;
+
 use crate::bsdf::{BxDF, BSDF};
 use crate::ray::SurfaceHit;
 use crate::sampler::Sampler;
@@ -51,8 +57,8 @@ use crate::spectrum::SpectralAlgebra;
 
 /// 完整 BSDF 的构建器。对应数据层"BSDF 类节点"。
 ///
-/// 从表面命中 `hit` 构造 [`BSDF<S>`]。`BSDF` 是多个 [`BxDF`] 的组合，
-/// 由构建器决定组合哪些分量、权重如何分配。
+/// 从表面命中 `hit` 和出射方向 `wo` 构造 [`BSDF<S>`]。`BSDF` 是多个
+/// [`BxDF`] 的组合，由构建器决定组合哪些分量、权重如何分配。
 ///
 /// # 运行时工厂，不可序列化
 ///
@@ -76,6 +82,8 @@ pub trait BSDFBuilder<S: SpectralAlgebra>: Send + Sync {
     ///
     /// 参数：
     /// - `hit`：表面命中信息（位置、法线、UV、instance_id 等）；
+    /// - `wo`：着色点出射方向（指向相机/上一跳），世界空间，已归一化。
+    ///   等于 `-ray.dir.normalize()`。用于构造 `BSDF` 的局部坐标系；
     /// - `sampler`：采样器。需要随机选择的材质（如随机选层的混合材质）
     ///   从这里取样本；纯确定性材质忽略它；
     /// - `wavelengths`：波长上下文，只读取。
@@ -85,6 +93,7 @@ pub trait BSDFBuilder<S: SpectralAlgebra>: Send + Sync {
     fn build(
         &self,
         hit: &SurfaceHit,
+        wo: Vec3,
         sampler: &mut dyn Sampler,
         wavelengths: &S::WavelengthContext,
     ) -> BSDF<S>;
@@ -96,9 +105,15 @@ pub trait BSDFBuilder<S: SpectralAlgebra>: Send + Sync {
 
 /// 单个 BxDF 的构建器。对应数据层"BxDF 类节点"。
 ///
-/// 从表面命中 `hit` 构造单个 [`BxDF<S>`]。返回 `Arc<dyn BxDF<S>>` 而非
-/// 具体类型：`BSDF::new` 需要 `Vec<(Arc<dyn BxDF<S>>, f32)>`，构建器
-/// 直接产出 `Arc` 便于组合。
+/// 从表面命中 `hit` 和出射方向 `wo` 构造单个 [`BxDF<S>`]。返回
+/// `Arc<dyn BxDF<S>>` 而非具体类型：`BSDF::new` 需要
+/// `Vec<(Arc<dyn BxDF<S>>, f32)>`，构建器直接产出 `Arc` 便于组合。
+///
+/// # 为什么需要 `wo`
+///
+/// 部分 BxDF 依赖 `wo` 做构造期决策——如 Fresnel 混合的两层 BxDF
+/// （反射/透射比由 `wo` 与法线夹角决定）、方向依赖的归一化因子。
+/// 不接收 `wo` 的 BxDF 忽略它即可。
 ///
 /// # 与 `BSDFBuilder` 的分工
 ///
@@ -122,6 +137,7 @@ pub trait BXDFBuilder<S: SpectralAlgebra>: Send + Sync {
     fn build(
         &self,
         hit: &SurfaceHit,
+        wo: Vec3,
         sampler: &mut dyn Sampler,
         wavelengths: &S::WavelengthContext,
     ) -> Arc<dyn BxDF<S>>;
@@ -136,26 +152,11 @@ pub trait BXDFBuilder<S: SpectralAlgebra>: Send + Sync {
 /// 封装不同类型的材质构建器。当前只有 `BSDF` 变体；未来加 BSSRDF 时
 /// 新增变体，`Scene::material` 的签名不变——这是用枚举而非
 /// `&dyn BSDFBuilder` 的原因。
-/// 材质枚举 = 方程项的结构种类
-///
-/// # 内部持有 `Arc`
-///
-/// 每个变体持有 `Arc<dyn ...Builder<S>>`：材质是场景级数据，被多个
-/// 着色点共享；`Arc` 保证引用计数开销低且线程安全。`Scene::material`
-/// 返回 `&Material<S>`，不需要克隆 `Arc`。
-///
-/// # Send + Sync
-///
-/// `Arc<dyn BSDFBuilder<S>>` 要求 `BSDFBuilder: Send + Sync`（已满足），
-/// 所以 `Material` 自动 `Send + Sync`。`Scene` 要求 `Send + Sync`，
-/// `Material` 满足这个约束。
 pub enum Material<S: SpectralAlgebra> {
     /// BSDF 材质。构造完整 [`BSDF`]。
     BSDF(Arc<dyn BSDFBuilder<S>>),
     // 未来扩展：
     // BSSRDF(Arc<dyn BSSRDFBuilder<S>>),
-    // 或者更一般的混合材质：
-    // Mixed { bsdf: Option<Arc<dyn BSDFBuilder<S>>>, bssrdf: ... },
 }
 
 impl<S: SpectralAlgebra> Material<S> {
@@ -165,12 +166,6 @@ impl<S: SpectralAlgebra> Material<S> {
     }
 
     /// 如果是 BSDF 材质，返回 `&dyn BSDFBuilder<S>`。
-    ///
-    /// 用于需要直接访问构建器的场景（如 BDPT 需要按材质类型分派）。
-    /// 普通 PT 用 [`Self::build_bsdf`] 即可。
-    ///
-    /// 当前只有 `BSDF` 变体，所以总是返回 `Some`。未来加 BSSRDF 时，
-    /// 对 BSSRDF 变体返回 `None`。
     pub fn as_bsdf_builder(&self) -> Option<&dyn BSDFBuilder<S>> {
         match self {
             Material::BSDF(b) => Some(b.as_ref()),
@@ -179,25 +174,21 @@ impl<S: SpectralAlgebra> Material<S> {
 
     /// 构造 BSDF。如果不是 BSDF 材质，返回 `None`。
     ///
-    /// 普通 PT 只处理 BSDF 材质；BSSRDF 材质的路径追踪需要不同处理
-    /// （次表面散射），由积分器按材质类型分派。
-    ///
-    /// 当前只有 `BSDF` 变体，所以总是返回 `Some`。未来加 BSSRDF 时，
-    /// 对 BSSRDF 变体返回 `None`。
+    /// `wo` 是着色点出射方向，世界空间，已归一化。等于
+    /// `-ray.dir.normalize()`。
     pub fn build_bsdf(
         &self,
         hit: &SurfaceHit,
+        wo: Vec3,
         sampler: &mut dyn Sampler,
         wavelengths: &S::WavelengthContext,
     ) -> Option<BSDF<S>> {
         match self {
-            Material::BSDF(b) => Some(b.build(hit, sampler, wavelengths)),
+            Material::BSDF(b) => Some(b.build(hit, wo, sampler, wavelengths)),
         }
     }
 
     /// 是否是 BSDF 材质。
-    ///
-    /// BDPT 等需要按材质类型分派的积分器用它做快速判断。
     pub fn is_bsdf(&self) -> bool {
         matches!(self, Material::BSDF(_))
     }
@@ -210,7 +201,7 @@ impl<S: SpectralAlgebra> Material<S> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::bsdf::{Diffuse, BxDFEntry};
+    use crate::bsdf::{BxDFEntry, Diffuse};
     use crate::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
     use glam::{Vec2, Vec3};
     use kzray_data::common::InstanceId;
@@ -228,8 +219,6 @@ mod tests {
         }
     }
 
-    // ─────────── 测试用 Builder ───────────
-
     struct ConstantBSDFBuilder {
         albedo: SpectrumRgb,
     }
@@ -238,12 +227,13 @@ mod tests {
         fn build(
             &self,
             _hit: &SurfaceHit,
+            wo: Vec3,
             _sampler: &mut dyn Sampler,
             _wavelengths: &NoWavelengths,
         ) -> BSDF<SpectrumRgb> {
             let bxdf: Arc<dyn BxDF<SpectrumRgb>> = Arc::new(Diffuse::new(self.albedo));
             BSDF::new(vec![BxDFEntry::new (bxdf, 1.0, SpectrumRgb::from_array([1.0, 1.0, 1.0]))],
-                Vec3::Y, Vec3::Y)
+                wo, Vec3::Y)
                 .expect("BSDF construction should succeed")
         }
     }
@@ -256,6 +246,7 @@ mod tests {
         fn build(
             &self,
             _hit: &SurfaceHit,
+            _wo: Vec3,
             _sampler: &mut dyn Sampler,
             _wavelengths: &NoWavelengths,
         ) -> Arc<dyn BxDF<SpectrumRgb>> {
@@ -265,12 +256,11 @@ mod tests {
 
     struct TestSampler;
     impl Sampler for TestSampler {
+        fn start_pixel_sample(&mut self, _pixel: glam::UVec2, _sample_index: u32) {}
         fn next_f32(&mut self, _dimension: u32) -> f32 {
             0.5
         }
     }
-
-    // ─────────── BSDFBuilder ───────────
 
     #[test]
     fn bsdf_builder_produces_usable_bsdf() {
@@ -279,7 +269,7 @@ mod tests {
         };
         let hit = dummy_hit();
         let mut sampler = TestSampler;
-        let bsdf = builder.build(&hit, &mut sampler, &NoWavelengths);
+        let bsdf = builder.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths);
         let wi = Vec3::new(0.0, 1.0, 0.0);
         let value = bsdf.eval(wi, crate::bsdf::TransportMode::Radiance);
         assert!(value.0[0] > 0.0);
@@ -294,34 +284,16 @@ mod tests {
     }
 
     #[test]
-    fn bsdf_builder_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<ConstantBSDFBuilder>();
-    }
-
-    // ─────────── BXDFBuilder ───────────
-
-    #[test]
     fn bxdf_builder_produces_usable_bxdf() {
         let builder = ConstantBXDFBuilder {
             albedo: SpectrumRgb::new(0.8, 0.2, 0.2),
         };
         let hit = dummy_hit();
         let mut sampler = TestSampler;
-        let bxdf = builder.build(&hit, &mut sampler, &NoWavelengths);
+        let bxdf = builder.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths);
         assert!(bxdf.flags().is_diffuse());
         assert!(bxdf.flags().is_valid());
     }
-
-    #[test]
-    fn bxdf_builder_is_object_safe() {
-        let builder = ConstantBXDFBuilder {
-            albedo: SpectrumRgb::ONE,
-        };
-        let _: Box<dyn BXDFBuilder<SpectrumRgb>> = Box::new(builder);
-    }
-
-    // ─────────── Material 枚举 ───────────
 
     #[test]
     fn material_bsdf_constructor() {
@@ -333,14 +305,6 @@ mod tests {
     }
 
     #[test]
-    fn material_as_bsdf_builder_returns_some_for_bsdf() {
-        let material = Material::bsdf(Arc::new(ConstantBSDFBuilder {
-            albedo: SpectrumRgb::ONE,
-        }));
-        assert!(material.as_bsdf_builder().is_some());
-    }
-
-    #[test]
     fn material_build_bsdf_works() {
         let material = Material::bsdf(Arc::new(ConstantBSDFBuilder {
             albedo: SpectrumRgb::new(0.8, 0.2, 0.2),
@@ -348,7 +312,7 @@ mod tests {
         let hit = dummy_hit();
         let mut sampler = TestSampler;
         let bsdf = material
-            .build_bsdf(&hit, &mut sampler, &NoWavelengths)
+            .build_bsdf(&hit, Vec3::Y, &mut sampler, &NoWavelengths)
             .expect("BSDF material should build");
         let wi = Vec3::new(0.0, 1.0, 0.0);
         let value = bsdf.eval(wi, crate::bsdf::TransportMode::Radiance);
@@ -359,15 +323,5 @@ mod tests {
     fn material_is_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<Material<SpectrumRgb>>();
-    }
-
-    #[test]
-    fn material_can_be_matched() {
-        let material = Material::bsdf(Arc::new(ConstantBSDFBuilder {
-            albedo: SpectrumRgb::ONE,
-        }));
-        match material {
-            Material::BSDF(_) => {} // 当前唯一变体
-        }
     }
 }

@@ -1,10 +1,10 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/kzray-data",
-    "crates/kzray-exec",
-    "crates/kzray-abs",
     "crates/kzray-math",
+    "crates/kzray-data",
+    "crates/kzray-abs",
+    "crates/kzray-impl",
 ]
 
 [workspace.package]
@@ -19,4 +19,5 @@ bincode = "1.3"
 rayon = "1.10"
 rand = "0.10"          
 rand_pcg = "0.10"
+rand_core = "0.10"
 thiserror = "1"

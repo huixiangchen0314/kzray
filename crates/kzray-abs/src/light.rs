@@ -597,18 +597,19 @@ pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
 pub trait LightSampler: Send + Sync {
     /// 按构造时固定的选择策略选一个光源。
     ///
-    /// 返回 `None` 表示没有可用光源（如场景无光源），或采样失败。
-    /// 两者语义不同但共用 `None`；需要区分时由调用方自行处理。
-    ///
-    /// 与 [`Light::sample_li`] 的分工：本方法从 `sampler` 取样本并
-    /// **消耗维度**，选择光源；`Light::sample_li` 接受已取出的 2D
-    /// 样本，不消耗维度，只负责采样单个光源的点/方向。
+    /// 参数：
+    /// - `ctx`：着色点上下文，供依赖位置的选择策略使用；
+    /// - `sampler`：采样器；
+    /// - `dimension`：**维度基址**。采样器从此维开始消耗，按 `consumed`
+    ///   推进。与 `BxDF::sample_f` / `BSDF::sample_f` 的 `dimension` 语义
+    ///   一致。
     ///
     /// 返回的 `LightSelection::consumed` 报告本次采样实际消耗的维度数。
     fn sample(
         &self,
         ctx: &LightSampleContext,
         sampler: &mut impl Sampler,
+        dimension: u32,
     ) -> Option<LightSelection>;
 
     /// 给定光源 ID，返回选择该光源的概率。

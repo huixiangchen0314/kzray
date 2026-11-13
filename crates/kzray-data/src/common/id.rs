@@ -21,6 +21,12 @@ impl EntityId {
         }
         EntityId(h)
     }
+
+    /// 取原始 u64 位模式（JNI / FFI / 序列化场景直接使用）。
+    #[inline]
+    pub fn as_u64(self) -> u64 {
+        self.0
+    }
 }
 
 macro_rules! typed_ref {
@@ -30,6 +36,15 @@ macro_rules! typed_ref {
         #[serde(transparent)]
         pub struct $name(pub EntityId);
 
+        impl $name {
+            /// 取原始 u64 位模式（JNI / FFI / 序列化场景直接使用）。
+            #[inline]
+            pub fn as_u64(self) -> u64 {
+                self.0.as_u64()
+            }
+        }
+
+        
         impl From<EntityId> for $name {
             fn from(id: EntityId) -> Self { $name(id) }
         }
