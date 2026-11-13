@@ -20,9 +20,9 @@ use super::instance::RenderInstance;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct RenderInput {
-    /// 场
+    /// 场(函数调用的指定和参数信息)
     pub fields: BTreeMap<FieldId, FieldExpr>,
-    /// 节点图根节点
+    /// 节点图节点
     pub nodes: BTreeMap<NodeId, Node>,
     /// 材质
     pub materials: BTreeMap<MaterialId, Material>,
@@ -167,13 +167,23 @@ impl RenderInput {
             }
         }
 
-        // 7. 材质的 BSDF Field 可达
+        // 7. 材质的 BSDF FieldExpr 校验
         for (id, mat) in &self.materials {
-            if !self.fields.contains_key(&mat.bsdf) {
-                return Err(DataError::InvalidParam {
-                    path: format!("material[{id:?}].bsdf"),
-                    reason: format!("引用的 Field {:?} 不存在", mat.bsdf),
-                });
+            match &mat.bsdf {
+                FieldExpr::Constant(v) => {
+                    v.validate(&format!("material[{id:?}].bsdf"))?;
+                }
+                FieldExpr::Bitmap(_) => {
+                    // 纹理资源引用，数据层不检查内容（由纹理加载层负责）
+                }
+                FieldExpr::NodeOutput(no) => {
+                    if !self.nodes.contains_key(&no.node) {
+                        return Err(DataError::InvalidParam {
+                            path: format!("material[{id:?}].bsdf"),
+                            reason: format!("引用的节点 {:?} 不存在", no.node),
+                        });
+                    }
+                }
             }
         }
 

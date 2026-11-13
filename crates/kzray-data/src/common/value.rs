@@ -5,6 +5,8 @@
 //! - `Array(Vec<Value>)`：常量数组，元素是纯值，**不可能藏引用**
 //! - `String` 保留：枚举型配置（`"srgb"` / `"ggx"` / `"box"`）需要
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use super::error::DataError;
@@ -22,6 +24,16 @@ pub enum Value {
     /// **纯值数组**。元素是 `Value`，无引用。渲染器拿到的常量数组
     /// 永远是确定的值序列，不存在需要运行时解包的子结构。
     Array(Vec<Value>),
+    /// **纯值 Map**：键是字符串，值是纯值。无引用、无函数。
+    ///
+    /// 用途：结构化参数传递（材质参数打包、节点配置等）。例如
+    /// `{ albedo: [0.8, 0.2, 0.2], roughness: 0.2, model: "ggx" }`。
+    ///
+    /// 用 `BTreeMap` 而非 `HashMap`：
+    /// - 序列化顺序确定（diff、测试、调试友好）；
+    /// - `PartialEq` 不依赖 hash；
+    /// - 无哈希随机性（可复现）。
+    Map(BTreeMap<String, Value>),
 }
 
 impl Value {

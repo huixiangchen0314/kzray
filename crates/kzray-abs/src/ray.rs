@@ -1,11 +1,25 @@
 use glam::{Vec2, Vec3};
 use kzray_data::common::InstanceId;
+use kzray_math::onb::Onb;
 
 // ═══════════════════════════════════════════════════════════════
 // Ray
 // ═══════════════════════════════════════════════════════════════
 
 /// 光线。`origin + t * dir`，`t ∈ [t_min, t_max]` 由求交参数约束，不存于结构体。
+///
+/// # 携带的信息
+///
+/// - 几何：`origin` / `dir`；
+/// - 时间：`time`，用于运动模糊的时间插值。
+///
+/// # 不携带的信息
+///
+/// - 介质（`medium`）：随光线传播切换，放求交/积分上下文，不在这里。
+///   放 `Ray` 意味着每次切换要构造新 `Ray`（破坏 `Copy`）或让 `Ray`
+///   可变；体积路径本来就需要维护介质栈，放上下文是自然的。pbrt 把
+///   `medium` 放 `Ray` 是因为 C++ 的 `Ray` 可变；Rust 里 `Ray` 是
+///   `Copy` 的，代价更高。
 #[derive(Clone, Copy, Debug)]
 pub struct Ray {
     pub origin: Vec3,
@@ -16,35 +30,45 @@ pub struct Ray {
     /// 光线变换不强制归一化，以保留 `t` 的仿射可比性。
     pub dir: Vec3,
 
-    // TODO(ray-or-context): 是否在 `Ray` 中携带 `time`，留给未来决断。
-    //
-    // 运动模糊需要光线携带时间，用于对运动几何做时间插值。当前无法判断
-    // 应由 `Ray` 还是上下文提供：
-    // - 放 `Ray`：求交接口签名不变，任意求交路径都能拿到时间；代价是
-    //   `Ray` 变大，阴影射线/内部反弹等不需要时间的路径也承担字段。
-    // - 放上下文：`Ray` 保持轻量，时间由相机样本/积分器显式传递；代价是
-    //   求交接口需要额外参数，或引入求交上下文，调用链变长。
-    //
-    // 参考：pbrt 的 `Ray` 带 `Float time`。
-    // pub time: f32,
-
-    // TODO(ray-or-context): 是否在 `Ray` 中携带 `medium`，留给未来决断。
-    //
-    // 体积渲染需要知道光线当前所在介质，求交后根据边界和 `eta` 切换介质。
-    // 当前无法判断应由 `Ray` 还是上下文提供：
-    // - 放 `Ray`：介质随光线传播，求交和体积采样可直接读取；代价是 `Ray`
-    //   变大，且介质切换需要可变更新或返回新光线。
-    // - 放上下文：`Ray` 保持轻量，介质栈由积分器维护，求交时显式传入/返回；
-    //   代价是体积路径的调用链需要显式传递介质状态。
-    //
-    // 参考：pbrt 的 `Ray` 带 `Medium medium`。
-    // pub medium: MediumId,
-
+    /// 光线时刻，归一化到快门区间 `[0, 1]`。
+    ///
+    /// - `0.0`：快门开启；
+    /// - `1.0`：快门关闭。
+    ///
+    /// 相机生成 primary ray 时由相机样本决定；次级光线（反射/透射/
+    /// 阴影）通过 [`Ray::spawn`] 派生，`time` 自动继承主光线。同一路径
+    /// 上的所有光线共享同一时刻，这是运动模糊物理正确性的前提。
+    ///
+    /// 无运动模糊的场景所有光线 `time = 0.0`，求交时不做时间插值。
+    pub time: f32,
 }
 
 impl Ray {
-    pub const fn new(origin: Vec3, dir: Vec3) -> Self {
-        Ray { origin, dir }
+    /// 构造光线。
+    ///
+    /// `time` 归一化到 `[0, 1]`，对应快门区间。相机生成 primary ray 时
+    /// 传相机样本的时间；固定场景传 `0.0`。
+    pub const fn new(origin: Vec3, dir: Vec3, time: f32) -> Self {
+        Ray { origin, dir, time }
+    }
+
+    /// 从当前光线派生一条新光线。
+    ///
+    /// `time` 自动继承——次级光线（反射/透射/阴影/偏移后的 primary ray）
+    /// 必须与主光线同一时刻。这是运动模糊物理正确性的前提，也是用
+    /// `spawn` 而非 `Ray::new` 的原因。
+    ///
+    /// 典型用法：
+    ///
+    /// ```text
+    /// // 反射光线
+    /// let reflected = ray.spawn(hit.offset_origin(1.0, eps), reflect_dir);
+    /// // 阴影射线
+    /// let shadow = ray.spawn(hit.offset_origin(1.0, eps), to_light);
+    /// ```
+    #[inline]
+    pub const fn spawn(&self, origin: Vec3, dir: Vec3) -> Self {
+        Ray { origin, dir, time: self.time }
     }
 
     /// 参数化位置。
@@ -63,7 +87,7 @@ impl Ray {
 pub enum Hit {
     Surface(SurfaceHit),
     SurfaceWithDifferentials(SurfaceHitWithDifferentials),
-    // 未来: Curve(CurveHit), Volume(VolumeEvent), ...
+    // TODO: Curve(CurveHit), Volume(VolumeEvent), ...
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -76,6 +100,9 @@ pub enum Hit {
 /// 材质、BSDF 等不在其中——通过 `instance_id` / `prim_id` 在 `Scene` 中查得。
 /// 求交返回统一的 `SurfaceHit`，调用方拆字段使用；可选/昂贵信息（微分、AOV）
 /// 通过不同的求交入口或旁路输出控制。
+///
+/// 不携带 `time`：`time` 是光线属性，从对应的 `Ray` 读取。求交不改变
+/// 时刻。
 #[derive(Clone, Copy, Debug)]
 pub struct SurfaceHit {
     /// 光线参数。击中点 = `origin + t * dir`。
@@ -123,6 +150,25 @@ pub struct SurfaceHitWithDifferentials {
     /// - 传播后的微分要 clamp/scale，避免数值爆炸或退化
     /// - 新光线起点偏移后，origin 微分仍归零，因为所有微分光线从同一偏移点出发
     pub differentials: SurfaceDifferentials,
+
+    /// 表面参数化对 u 的偏导（世界坐标）。
+    ///
+    /// 由求交填充（三角形从顶点插值，解析形状从参数化算）。与
+    /// [`SurfaceDifferentials::dpdx`] / [`SurfaceDifferentials::dpdy`] 不同：
+    /// 后两者是**屏幕空间**微分，这里是**表面参数化（uv）**的偏导。
+    ///
+    /// 用途：构造精确切线空间（各向异性 BRDF、法线贴图）。各向同性
+    /// BSDF 用 [`SurfaceHit::frame`] 的 `Onb::from_w(shading_normal)` 即可，
+    /// 不需要这两个字段。
+    ///
+    /// 不要求与 `shading_normal` 正交（法线贴图扰动后通常不正交）；
+    /// 实现层用 Gram-Schmidt 正交化，退化时回退到 `Onb::from_w`。
+    pub dpdu: Vec3,
+
+    /// 表面参数化对 v 的偏导（世界坐标）。
+    ///
+    /// 与 [`Self::dpdu`] 配对；用途与退化处理见该字段文档。
+    pub dpdv: Vec3,
 }
 
 impl SurfaceHit {
@@ -134,6 +180,32 @@ impl SurfaceHit {
     pub fn offset_origin(&self, sign: f32, epsilon: f32) -> Vec3 {
         let scale = self.distance.max(1.0);
         self.position + self.geometric_normal * (sign * epsilon * scale)
+    }
+
+    /// 出射方向 `wo`：从着色点指向相机/上一跳。
+    ///
+    /// 等于 `-ray.dir` 归一化。`Ray::dir` 不要求归一化，此处显式归一化
+    /// 后再取反，保证返回单位向量。
+    ///
+    /// 与 `BSDF::new(wo_world, ...)` 的 `wo_world` 一致。
+    ///
+    /// 求交成功的 `SurfaceHit` 对应的 `ray.dir` 一定非零（求交本身要求
+    /// 非零方向），`normalize()` 不会产生 NaN。
+    #[inline]
+    pub fn wo(&self, ray: &Ray) -> Vec3 {
+        -ray.dir.normalize()
+    }
+
+    /// 着色局部坐标系。
+    ///
+    /// 用 `shading_normal` 构造正交基，与 `BSDF::new` 的 `normal_world`
+    /// 一致。各向同性 BSDF 使用此坐标系即可。
+    ///
+    /// 各向异性 BSDF 或法线贴图需要精确切线（`dpdu` / `dpdv`）时，应从
+    /// [`SurfaceHitWithDifferentials`] 获取，本方法不承担该信息。
+    #[inline]
+    pub fn frame(&self) -> Onb {
+        Onb::from_w(self.shading_normal)
     }
 }
 
@@ -159,7 +231,7 @@ pub struct RayDifferentials {
 /// 纹理坐标偏导，组成雅可比矩阵，决定 mipmap 层级和各向异性。
 #[derive(Clone, Copy, Debug)]
 pub struct RayDifferential {
-    /// 主射线。
+    /// 主射线。`time` 由主射线携带，微分偏移不改变时刻。
     pub ray: Ray,
 
     /// 可选的微分偏移。
@@ -203,6 +275,7 @@ impl RayDifferential {
     ///
     /// 语义：
     /// - 新光线的 origin 微分归零：所有微分光线从同一个表面点出发；
+    /// - 新光线的 `time` 继承主光线的 `time`；
     /// - 方向微分根据距离、表面几何、事件类型（反射/透射）和折射率
     ///   更新，保证后续表面的纹理过滤使用正确的屏幕空间导数；
     /// - 若 `self.differentials` 为 `None`，返回的微分光线也为 `None`。
@@ -246,7 +319,8 @@ pub struct SurfaceDifferentials {
 ///   反射/折射对屏幕空间步进的影响。
 ///
 /// 参数显式传入，避免把表面交互状态塞进 `RayDifferential` 或
-/// 依赖隐式上下文。
+/// 依赖隐式上下文。`time` 不在这里——微分光线继承主光线的 `time`，
+/// 与 `SpawnRayParams` 无关。
 #[derive(Clone, Copy, Debug)]
 pub struct SpawnRayParams {
     /// 新光线起点，通常是偏移后的表面交点。

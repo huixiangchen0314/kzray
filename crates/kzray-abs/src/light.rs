@@ -1,8 +1,12 @@
-use glam::{Vec2, Vec3};
-use kzray_data::LightId;
 use crate::ray::Ray;
 use crate::sampler::Sampler;
 use crate::spectrum::SpectralAlgebra;
+use glam::{Vec2, Vec3};
+use kzray_data::LightId;
+
+// ═══════════════════════════════════════════════════════════════
+// 光源类型
+// ═══════════════════════════════════════════════════════════════
 
 /// 光源类型。
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -27,6 +31,10 @@ impl LightType {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 着色点上下文
+// ═══════════════════════════════════════════════════════════════
+
 /// 着色点上下文，传给光源采样。
 #[derive(Clone, Copy, Debug)]
 pub struct LightSampleContext {
@@ -36,6 +44,10 @@ pub struct LightSampleContext {
     pub normal: Vec3,
     // TODO(ray-or-context): 介质信息是否放这里，留给未来决断。
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 采样几何
+// ═══════════════════════════════════════════════════════════════
 
 /// `LiSample` 使用的几何形态。
 ///
@@ -80,6 +92,10 @@ pub enum LeGeometry {
     Direction,
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 采样结果
+// ═══════════════════════════════════════════════════════════════
+
 /// 单次光源采样的结果。
 ///
 /// 对应渲染方程中的入射项 `L_i`：
@@ -96,11 +112,103 @@ pub enum LeGeometry {
 ///   避免 `li` 与 `LeSample::emitted` 只差一字母的视觉混淆。
 /// - `wi` 对应 `ω_i`，从着色点指向光源点的单位入射方向。保留渲染方程
 ///   符号的 ASCII 转写，与 `pdf_li(ctx, wi)` 参数、文档 `ω_i` 三处一致。
-/// - `pdf` 是光源内部采样该入射方向的概率密度（立体角测度），不包含
+/// - `pdf` 是光源内部采样该入射方向的概率密度（**立体角测度**），不包含
 ///   “选择该光源”的概率；总 PDF 由调用方把 `light_pdf * pdf` 得到。
 /// - `geometry` 是光源一侧的采样几何，用于阴影射线、可见性判断，
 ///   以及面积测度到立体角测度的转换；无限远光源为
 ///   [`LiGeometry::Direction`]。
+///
+/// # 测度
+///
+/// `pdf` 是**立体角测度**（从着色点看光源方向的测度）。与 BSDF 的
+/// `BxDFSample::pdf` 同测度、同参考点（均为着色点），可以直接在 MIS
+/// 权重中相加。如果实现内部在面积测度上采样，返回前必须转换成立体角
+/// 测度：`pdf_omega = pdf_area * distance^2 / |cos(theta_light)|`。
+///
+/// delta 光源的 `pdf` 无有限值，调用方不应读取此字段参与 MIS。
+///
+/// # delta 判断
+///
+/// `LiSample` 没有 `flags` 字段。调用方判断本次采样是否命中 delta 光源，
+/// 应通过 `LightSelection::light_id` 查 `LightType::is_delta()`。
+/// **不要通过 `pdf == 0.0` 反推**——非 delta 光源在退化方向也可能返回
+/// 接近 0 的 PDF，两者语义不同。
+///
+/// # 可分解性
+///
+/// `LiSample` 没有 `weight` 字段。`incident` 是光源的入射辐射亮度
+/// `L_i`（**不是** BSDF 值），不含余弦项、不含 PDF。光源采样路径的
+/// 完整贡献是：
+///
+/// ```text
+/// throughput *= f × incident × cos_theta_i / total_pdf
+/// ```
+///
+/// 每个因子的来源：
+///
+/// | 因子 | 来源 | 说明 |
+/// |---|---|---|
+/// | `f` | `BSDF::eval(wi, mode)` | 着色点的 BSDF 值，由调用方从 BSDF 模块取 |
+/// | `incident` | 本结构体字段 | 光源的入射辐射亮度 `L_i` |
+/// | `cos_theta_i` | `ctx.normal · wi` | 着色点几何项，由调用方计算 |
+/// | `total_pdf` | `light_pdf × LiSample::pdf` | 选择光源的概率 × 光源内部采样 PDF |
+///
+/// 也就是说，`LiSample` 只提供 `incident` 和 `pdf` 两个因子；`f` 来自
+/// BSDF，`cos` 来自着色点几何，`light_pdf` 来自 [`LightSelection`]。
+/// 四者相乘除以总 PDF 才是这一步的直接光照贡献。
+///
+/// 完整调用链示例（非 delta 光源，参与 MIS）：
+///
+/// ```text
+/// // 调用方已持有：
+/// // - ctx: LightSampleContext（着色点位置与法线）
+/// // - light: &L（L: Light 的具体实现）
+/// // - light_selection: LightSelection（LightSampler::sample 的结果）
+/// // - sample_2d: Vec2（调用方预取的 2D 样本）
+/// // - bsdf: BSDF（着色点的 BSDF）
+/// // - wl: S::WavelengthContext
+///
+/// let li = light.sample_li(&ctx, sample_2d, wl)?;
+///
+/// // 光源采样给出 incident 和 pdf
+/// let incident = li.incident;      // L_i
+/// let pdf_li = li.pdf;             // 立体角测度
+///
+/// // 调用方从 BSDF 取 f
+/// let f = bsdf.eval(li.wi, TransportMode::Radiance);
+///
+/// // 调用方从着色点几何算 cos
+/// let cos_theta_i = ctx.normal.dot(li.wi).max(0.0);
+///
+/// // 总 PDF = 选择该光源的概率 × 光源内部采样 PDF
+/// let total_pdf = light_selection.light_pdf * pdf_li;
+///
+/// // 蒙特卡洛估计量
+/// throughput *= f * incident * cos_theta_i / total_pdf;
+/// ```
+///
+/// 如果是 delta 光源（`light_type().is_delta() == true`），`pdf_li`
+/// 无有限值，不参与 MIS。调用方直接用“采样命中”的贡献：
+///
+/// ```text
+/// let li = light.sample_li(&ctx, sample_2d, wl)?;
+/// let f = bsdf.eval(li.wi, TransportMode::Radiance);
+/// let cos_theta_i = ctx.normal.dot(li.wi).max(0.0);
+/// // delta 光源：light_pdf 作为离散概率，无连续 PDF
+/// throughput *= f * incident * cos_theta_i / light_selection.light_pdf;
+/// ```
+///
+/// 与 `BxDFSample::weight` 的对比：`BxDFSample` 直接返回
+/// `weight = value × |cos| / pdf`，调用方乘 throughput 即可；但
+/// `pdf` 和 `value` 的可分解性只在 `value` 字段上保留。`LiSample`
+/// 不封装 `weight`，让所有因子显式可见，原因有二：
+///
+/// - **`cos` 的归属不同**：`BxDFSample` 的 `cos` 是 BSDF 半球积分的
+///   固有部分，BSDF 自己知道 `wi` 与法线的关系；`LiSample` 的
+///   `cos_theta_i` 是**着色点**的几何项，光源不知道着色点法线朝哪，
+///   塞进 `LiSample` 会让“光源采样”和“着色点几何”耦合。
+/// - **MIS 需要分别访问**：光源采样与 BSDF 采样的 MIS 权重计算需要
+///   `pdf` 和 `incident` 的独立值；提前乘成 `weight` 会丢失可分解性。
 #[derive(Clone, Copy, Debug)]
 pub struct LiSample<S> {
     /// 光源一侧的采样几何：`Surface` 有具体点与距离，`Direction` 没有。
@@ -117,11 +225,6 @@ pub struct LiSample<S> {
     /// 贡献到渲染方程的反射积分项。
     pub incident: S,
     /// 光源内部采样 PDF，**立体角测度**。
-    ///
-    /// 如果实现内部在面积测度上采样，返回前必须转换成
-    /// 立体角测度：`pdf_omega = pdf_area * distance^2 / |cos(theta_light)|`。
-    ///
-    /// delta 光源的 `pdf` 无有限值，调用方不应读取此字段参与 MIS。
     pub pdf: f32,
 }
 
@@ -137,12 +240,50 @@ pub struct LiSample<S> {
 /// ```text
 /// L_o(p, wo) = L_e(p, wo) + ∫_Ω ...
 /// ```
+///
+/// # 传输方向（隐含 Importance）
+///
+/// 本方法族的传输方向**隐含为 `Importance`**（从光源出发，追踪重要性），
+/// 因此没有 `TransportMode` 参数。对比：
+///
+/// - `Light::sample_li` / `pdf_li` / `AreaLight::emitted_radiance` 隐含
+///   `Radiance`（从着色点看向光源）；
+/// - `InfiniteLight::sample_le` / `pdf_le` / `emitted_radiance` 隐含
+///   `Importance`（从光源射向场景）；
+/// - `BxDF` 方法全部显式接收 `TransportMode`。
+///
+/// 光源侧不需要 `mode`，因为“光源发射什么”是物理量，与“从哪边看”
+/// 无关。BDPT 连接两端时，光源侧用 `Importance`，相机侧用 `Radiance`，
+/// 中间通过 BSDF 的 `mode` 参数切换。
+///
+/// # 测度
+///
+/// `pdf` 是**立体角测度**（从光源点射出方向的测度）。对于面光源，
+/// 光源侧采样通常先在面积上采点（`pdf_area`），再在方向半球上采样
+/// 方向（`pdf_dir`）；`LeSample::pdf` 只报告方向部分的立体角测度，
+/// 面积部分的测度由调用方从 `LeGeometry::Surface` 的采样结构另行处理。
+///
+/// 与 `LiSample::pdf` 的对比：两者都是立体角测度，但参考系不同
+/// （`LiSample::pdf` 从着色点看，`LeSample::pdf` 从光源点看）。BDPT
+/// 做端点连接时，需要把光源侧方向测度转换到连接方向的测度，转换因子
+/// 由几何项（距离平方、余弦项）提供。
 #[derive(Clone, Copy, Debug)]
 pub struct LeSample<S> {
     /// 光源侧采样几何：`Surface` 有具体表面点，`Direction` 没有。
     pub geometry: LeGeometry,
-    /// 从光源出发的方向，与 [`InfiniteLight::emitted_radiance`] 求值时的
-    /// `ray.direction` 同向。
+    /// 从光源出发、射向场景的方向。
+    ///
+    /// 与 [`InfiniteLight::emitted_radiance`] 求值时的 `ray.direction`
+    /// **反向**：
+    ///
+    /// - `emitted_radiance(ray)` 的 `ray` 从着色点出发，`ray.direction` 是
+    ///   视线方向（从着色点射向光源），返回沿该方向到达着色点的辐射亮度。
+    /// - `LeSample::direction` 从光源出发射向场景，是 `ray.direction` 的
+    ///   反向（即 `-ray.direction`）。
+    ///
+    /// 两者反向的原因是光源侧采样和着色点侧求值的参考点不同：
+    /// `emitted_radiance` 以着色点为原点问“朝这个方向看到什么”，
+    /// `sample_le` 以光源为原点问“光源朝这个方向发射什么”。
     ///
     /// 该方向无对应渲染方程符号（方程中 `ω_o` 是着色点出射方向），
     /// 因此使用工程化名称 `direction` 而非符号转写。
@@ -152,10 +293,12 @@ pub struct LeSample<S> {
     /// 命名来源：方程符号 `L_e` 的语义读法 "emitted radiance"。
     pub emitted: S,
     /// 方向测度 PDF，必须与 `pdf_le` 来自同一采样分布。
-    ///
-    /// 如果实现内部在 uv / texel 测度上采样，返回前必须转换成方向测度。
     pub pdf: f32,
 }
+
+// ═══════════════════════════════════════════════════════════════
+// 光源能力 trait
+// ═══════════════════════════════════════════════════════════════
 
 /// 所有光源共享的采样契约。
 ///
@@ -171,6 +314,31 @@ pub struct LeSample<S> {
 /// 波长上下文由 `S::WavelengthContext` 提供：
 /// - `Rgb` 配 `NoWavelengths`，零大小；
 /// - `Spectrum<N>` 配 `SampledWavelengths<N>`，N 强绑定。
+///
+/// # 维度管理
+///
+/// 本 trait 的所有采样方法（`sample_li` / `sample_le`）接收**调用方预取
+/// 的 `Vec2` 样本**，不管理 `Sampler` 状态、不消耗维度。维度消耗由
+/// 调用方通过 `sampler.next_2d(dimension)` 显式完成。这与
+/// [`LightSampler::sample`] 接收 `&mut impl Sampler`、内部消耗维度的
+/// 模型不同——分工见 [`LightSampler::sample`] 的文档。
+///
+/// # PDF 一致性契约
+///
+/// 对每个 `Light` 实现，必须满足：
+///
+/// - **`sample_li` / `pdf_li` 一致性**：对任意
+///   `s = sample_li(ctx, sample, wavelengths)`，应有
+///   `pdf_li(ctx, s.wi) == s.pdf`（delta 光源除外，两者均为 0）。
+/// - **`sample_li` / `sample_le` 一致性**（仅 [`InfiniteLight`]）：
+///   对同一方向 `d`，`sample_li` 返回的 `incident` / `pdf` 必须与
+///   `sample_le` 返回的 `emitted` / `pdf` 在 `wi = -d` 上一致；
+///   推荐复用 [`InfiniteLight::sample_li_via_le`]。
+/// - **`sample_le` / `pdf_le` 一致性**（仅 [`InfiniteLight`]）：
+///   对任意 `s = sample_le(sample, wavelengths)`，应有
+///   `pdf_le(s.direction, wavelengths) == s.pdf`（delta 光源除外）。
+///
+/// 跨实现测试必须校验上述等式；MIS 权重的正确性依赖它们。
 pub trait Light<S: SpectralAlgebra>: Send + Sync {
     /// 光源类型。
     ///
@@ -195,7 +363,9 @@ pub trait Light<S: SpectralAlgebra>: Send + Sync {
     /// （light incident），与返回类型 [`LiSample`] 对应。
     ///
     /// 参数 `sample` 是调用方从 sampler 取出的 2D 均匀样本；本方法不管理
-    /// sampler 状态，与 [`LightSampler::sample`] 的分工见该方法的文档。
+    /// sampler 状态、不消耗维度，与 [`LightSampler::sample`] 的分工见
+    /// 该方法的文档。调用方应在 `dimension` 处取 2D 样本后传入，下一次
+    /// 采样的基址推进 2。
     ///
     /// 对 [`AreaLight`] 实现，返回的 `incident` 应等于
     /// `self.emitted_radiance(light_position, light_normal, uv, -wi, wavelengths)`
@@ -207,7 +377,6 @@ pub trait Light<S: SpectralAlgebra>: Send + Sync {
     /// [`LiGeometry::Direction`]，且 `incident` / `pdf` 必须与
     /// [`InfiniteLight::sample_le`] 在同一方向上一致；推荐直接复用
     /// [`InfiniteLight::sample_li_via_le`] 保证两条路径 PDF 不分叉。
-    /// 跨实现测试应校验 `sample_li` 和 `sample_le` 的 PDF 一致。
     fn sample_li(
         &self,
         ctx: &LightSampleContext,
@@ -223,10 +392,8 @@ pub trait Light<S: SpectralAlgebra>: Send + Sync {
     /// delta 光源返回 0：连续方向采样采不到 delta 方向。
     /// 非 delta 光源返回有限值，用于 MIS 权重计算。
     ///
-    /// 与 [`Light::sample_li`] 的一致性约束：对任意
-    /// `s = sample_li(ctx, sample, wavelengths)`，应有
-    /// `pdf_li(ctx, s.wi) == s.pdf`（delta 光源除外，两者均为 0 /
-    /// 无有限值）。跨实现测试应校验此等式。
+    /// 契约：对任意 `s = sample_li(ctx, sample, wavelengths)`，应有
+    /// `pdf_li(ctx, s.wi) == s.pdf`（delta 光源除外）。
     fn pdf_li(&self, ctx: &LightSampleContext, wi: Vec3) -> f32;
 
     /// 光源的总辐射功率，逐波长（光谱值）。
@@ -259,9 +426,13 @@ pub trait AreaLight<S: SpectralAlgebra>: Light<S> {
     ///
     /// 参数说明：
     /// - `point` / `normal` / `uv` 是**光源表面**上的几何信息，不是着色点。
-    /// - `wo` 是从光源表面点出发、射向场景的方向，对应渲染方程
-    ///   出射方向 `ω_o`；等于 [`LiSample::wi`] 取反（从着色点指向光源点
-    ///   的 `-wi`）。
+    /// - `wo` 是从光源表面点出发、射向着色点的方向，对应渲染方程
+    ///   出射方向 `ω_o`。`LiSample::wi` 从着色点指向光源点，因此
+    ///   `wo = -wi`。
+    ///
+    /// 传输方向隐含 `Radiance`（从着色点看向光源），与
+    /// [`InfiniteLight::emitted_radiance`] 的 `Importance` 不同；原因见
+    /// [`LeSample`] 的“传输方向”文档。
     ///
     /// 与 [`Light::light_type`] 的契约：实现本 trait ⇒ `light_type()` 必须
     /// 返回 [`LightType::Area`]。
@@ -282,11 +453,22 @@ pub trait AreaLight<S: SpectralAlgebra>: Light<S> {
 
 /// 无限远光源能力（环境光 / 天空光 / 方向光）。
 ///
-/// `emitted_radiance`、`sample_le`、`pdf_le` 必须来自同一发射分布：
-/// 给定方向 `d`，`emitted_radiance(Ray::new(_, d))` 必须等于 `sample_le`
-/// 在该方向上返回的 `emitted`，且 `pdf_le(d)` 必须等于 `sample_le`
-/// 采样到 `d` 的方向测度 PDF。三者在同一 trait 上成对出现，就是为了
+/// `emitted_radiance`、`sample_le`、`pdf_le` 必须来自同一发射分布。
+/// 对任意 `s = sample_le(sample, wavelengths)`，应有：
+///
+/// ```text
+/// emitted_radiance(Ray::new(_, -s.direction)) == s.emitted
+/// pdf_le(s.direction, wavelengths) == s.pdf
+/// ```
+///
+/// 其中 `-s.direction` 是因为 `emitted_radiance` 接收光线传播方向
+/// （从着色点射向光源），而 `sample_le` 返回的 `direction` 是从光源
+/// 射向场景的方向，两者反向。三者在同一 trait 上成对出现，就是为了
 /// 让这条约束无法被实现方拆散。
+///
+/// **传输方向隐含 `Importance`**（从光源射向场景），见 [`LeSample`]
+/// 的“传输方向”文档。`sample_li` 通过 [`Self::sample_li_via_le`] 复用
+/// 本 trait 的采样，把方向取反后作为 `Radiance` 方向的入射光。
 pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
     /// 沿逃逸光线的辐射亮度。
     ///
@@ -295,6 +477,11 @@ pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
     /// （都是“给定方向求发射辐射亮度”），仅参数形式不同（无限远光源
     /// 只有射线，没有表面点）。两者不会在同一类型上同时实现
     /// （见 [`Light::light_type`] 契约），因此同名不引入调用歧义。
+    ///
+    /// **传输方向隐含 `Importance`**：`ray` 从着色点出发，
+    /// `ray.direction` 是视线方向（从着色点射向光源），与
+    /// [`Self::sample_le`] 的 `direction` **反向**。这与
+    /// [`LeSample::direction`] 的文档一致。
     ///
     /// 与 [`Light::light_type`] 的契约：实现本 trait 且非 delta ⇒
     /// `light_type()` 返回 [`LightType::Infinite`]；方向光（delta）⇒
@@ -308,20 +495,22 @@ pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
     /// [`Light::sample_li`] 的 `li`（light incident）形成对称。
     ///
     /// 返回 `None` 表示采样失败（如采样到零辐射方向）。方向为
-    /// 从光源出发的方向，与 [`InfiniteLight::emitted_radiance`] 求值时的
-    /// `ray.direction` 同向。
+    /// 从光源出发、射向场景的方向，与 [`InfiniteLight::emitted_radiance`]
+    /// 求值时的 `ray.direction` **反向**；原因见 [`LeSample::direction`]。
+    ///
+    /// **传输方向隐含 `Importance`**，无 `TransportMode` 参数；原因见
+    /// [`LeSample`] 的“传输方向”文档。
     ///
     /// 参数 `sample` 是调用方从 sampler 取出的 2D 均匀样本；本方法不管理
-    /// sampler 状态。
+    /// sampler 状态、不消耗维度。
     ///
     /// 无限远光源（环境光 / 天空光）返回的 `geometry` 应为
     /// [`LeGeometry::Direction`]；方向光作为 delta 光源，`pdf` 无有限值，
     /// 调用方应依据 [`LightType::is_delta`] 决定是否参与 MIS。
-    fn sample_le(
-        &self,
-        sample: Vec2,
-        wavelengths: &S::WavelengthContext,
-    ) -> Option<LeSample<S>>;
+    ///
+    /// 契约：对任意 `s = sample_le(sample, wavelengths)`，应有
+    /// `pdf_le(s.direction, wavelengths) == s.pdf`（delta 光源除外）。
+    fn sample_le(&self, sample: Vec2, wavelengths: &S::WavelengthContext) -> Option<LeSample<S>>;
 
     /// 给定方向，返回 `sample_le` 采样该方向的 PDF（方向测度）。
     ///
@@ -343,6 +532,8 @@ pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
         let s = self.sample_le(sample, wavelengths)?;
         Some(LiSample {
             geometry: LiGeometry::Direction,
+            // sample_le 的 direction 从光源射向场景；LiSample::wi 从着色点
+            // 射向光源，两者反向。
             wi: -s.direction,
             incident: s.emitted,
             pdf: s.pdf,
@@ -350,23 +541,70 @@ pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
     }
 }
 
+// ═══════════════════════════════════════════════════════════════
+// 光源选择器
+// ═══════════════════════════════════════════════════════════════
+
 /// 光源选择器：只负责在多个光源之间选择。
 ///
 /// `LightSampler` 的实例在构造层创建，采样策略、光源表、每个光源的
-/// 选择概率在构造时固定；每次调用的 `sampler` 由调用方（积分器）传入，
-/// 类型在调用点单态化。
+/// 选择概率在构造时固定；每次调用的 `sampler` 由调用方（积分器）传入。
 ///
 /// 光源选择概率的标量转换（如亮度近似或参考波长）在构造阶段显式完成，
 /// 不在本 trait 的方法上暴露。
+///
+/// # 维度管理
+///
+/// 与 [`Light::sample_li`] 不同，`LightSampler::sample` 接收
+/// `&mut impl Sampler` 并**在内部消耗维度**（如 BVH 光源采样器先选
+/// 节点、再选光源，消耗 > 1 维）。因此 [`LightSelection`] 必须携带
+/// `consumed` 字段，报告本次采样实际消耗的维度数；调用方下一次采样用
+/// `dimension + sel.consumed` 推进基址。
+///
+/// `sample` 返回 `None` 时，调用方用 [`Self::max_sample_dimensions`]
+/// 估计已消耗维度以恢复基址。失败通常意味着路径终止，所以这只是保守
+/// 恢复，不要求精确。
+///
+/// # PDF 一致性契约
+///
+/// 对任意 `sel = sample(ctx, sampler)`，应有：
+///
+/// ```text
+/// pdf(ctx, sel.light_id) == sel.light_pdf
+/// ```
+///
+/// 这是 MIS 的根基：光源采样路径用 `sel.light_pdf`，BSDF 采样路径用
+/// `pdf(ctx, light_id)` 反查。两者不一致，MIS 权重就错。跨实现测试
+/// 必须校验。
+///
+/// # `impl Sampler` 参数与 trait object
+///
+/// `sample` 用 `&mut impl Sampler` 而非 `&mut dyn Sampler`，是为了让
+/// 调用点单态化。代价是 `LightSampler` **不能直接作为 trait object**
+/// （`Box<dyn LightSampler>` 会因 `impl Sampler` 不 object-safe 而失败）。
+///
+/// 需要运行时切换光源选择策略时，有两种方案：
+///
+/// - **包装层**：定义一个 enum `LightSamplerKind`，内部持有具体
+///   `LightSampler` 实现。包装层**不实现** `LightSampler` trait（因为
+///   trait 的 `sample` 用 `&mut impl Sampler`，不是 object-safe）；
+///   而是定义自己的方法
+///   `fn sample(&self, ctx, sampler: &mut dyn Sampler) -> Option<LightSelection>`，
+///   内部 `match` 分派到具体实现的 `sample`（具体实现仍用
+///   `impl Sampler`，包装层用 `dyn` 转发）。虚分派限制在包装层。
+/// - **改签名**：把 `sample` 改为 `&mut dyn Sampler`，牺牲单态化换
+///   trait object。适合策略切换频繁、单次采样开销可接受的场景。
 pub trait LightSampler: Send + Sync {
     /// 按构造时固定的选择策略选一个光源。
     ///
-    /// 返回 `None` 表示没有可用光源（如场景无光源）。
+    /// 返回 `None` 表示没有可用光源（如场景无光源），或采样失败。
+    /// 两者语义不同但共用 `None`；需要区分时由调用方自行处理。
     ///
     /// 与 [`Light::sample_li`] 的分工：本方法从 `sampler` 取样本并
-    /// 选择光源（可能取多个样本，如 BVH 光源采样器先选节点再选光源）；
-    /// `Light::sample_li` 接受已取出的 2D 样本，只负责采样单个光源的
-    /// 点/方向，不管理 sampler 状态。
+    /// **消耗维度**，选择光源；`Light::sample_li` 接受已取出的 2D
+    /// 样本，不消耗维度，只负责采样单个光源的点/方向。
+    ///
+    /// 返回的 `LightSelection::consumed` 报告本次采样实际消耗的维度数。
     fn sample(
         &self,
         ctx: &LightSampleContext,
@@ -377,9 +615,23 @@ pub trait LightSampler: Send + Sync {
     ///
     /// 用于 MIS 权重计算：`total_pdf = light_pdf * light.pdf_li(...)`。
     ///
+    /// 契约：对任意 `sel = sample(ctx, sampler)`，应有
+    /// `pdf(ctx, sel.light_id) == sel.light_pdf`。
+    ///
     /// `ctx` 参数供依赖接收点位置的选择策略（如 BVH 光源采样器）使用；
     /// 不依赖位置的采样器可以忽略 `ctx`。
     fn pdf(&self, ctx: &LightSampleContext, light_id: LightId) -> f32;
+
+    /// 采样最多消耗的维度数。
+    ///
+    /// 用于两个场景：
+    ///
+    /// - `sample` 返回 `None` 时，调用方按此估计已消耗维度以恢复基址；
+    /// - 调用方需要静态分配维度时（如分层采样），按此预留维度块。
+    ///
+    /// 是否使用本方法由调用方决定；默认路径用 [`LightSelection::consumed`]
+    /// 追踪实际消耗，不需要读本方法。
+    fn max_sample_dimensions(&self) -> u32;
 }
 
 /// 光源选择结果：选了哪个光源、选择概率是多少。
@@ -391,5 +643,12 @@ pub struct LightSelection {
     ///
     /// 调用方计算总 PDF 时：`total_pdf = light_pdf * li_sample.pdf`
     /// （非 delta 光源）；delta 光源不参与 MIS，不需要总 PDF。
+    ///
+    /// 契约：`light_pdf == LightSampler::pdf(ctx, light_id)`。
     pub light_pdf: f32,
+    /// `sample` 从传入 sampler 消耗的维度数。
+    ///
+    /// 调用方下一次采样用 `dimension + consumed`。`sample` 返回 `None`
+    /// 时用 [`LightSampler::max_sample_dimensions`] 估计。
+    pub consumed: u32,
 }

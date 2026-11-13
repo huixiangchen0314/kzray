@@ -37,6 +37,14 @@ macro_rules! typed_ref {
         impl From<$name> for EntityId {
             fn from(t: $name) -> Self { t.0 }
         }
+
+        impl From<u64> for $name {
+            fn from(v: u64) -> Self { $name(EntityId(v)) }
+        }
+
+        impl From<$name> for u64 {
+            fn from(t: $name) -> Self { (t.0).0 }
+        }
     };
 }
 

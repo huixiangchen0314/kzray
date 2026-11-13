@@ -10,10 +10,12 @@ pub mod rect;
 pub mod transform;
 pub mod value;
 pub mod screen;
+pub mod rgb;
+pub mod image;
+
 
 pub use error::DataError;
 pub use field::{FieldExpr, FieldId};
-
 pub use id::{
     EntityId, InstanceId, 
     MeshId,
@@ -27,3 +29,5 @@ pub use rect::Rect;
 pub use transform::Transform;
 pub use value::Value;
 pub use screen::PixelCoord;
+pub use rgb::Rgb;
+pub use image::Image;

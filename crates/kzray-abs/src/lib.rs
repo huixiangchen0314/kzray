@@ -14,27 +14,27 @@
 pub mod error;
 pub mod ray;
 pub mod sampler;
-pub mod bxdf;
+pub mod bsdf;
+pub mod material;
 pub mod camera;
 pub mod accel;
 pub mod light;
 pub mod spectrum;
-
-// ═══════════════════════════════════════════════════════════════
-// 顶层重导出：使用方无需关心模块路径
-// ═══════════════════════════════════════════════════════════════
-
+pub mod sensor;
+pub mod film;
+pub mod scene;
 
 // ---- 能量代数 ----
 pub use spectrum::{
     ScalarAlgebra,
     SpectralAlgebra,
     Rgb,
-    NoWavelengths,
     SampledWavelengths,
 };
 
 pub use spectrum::Spectrum;
+
+pub use sensor::{RgbSensor, CieSensor};
 
 // ---- 采样 ----
 pub use sampler::Sampler;
@@ -42,4 +42,6 @@ pub use sampler::Sampler;
 // ---- 几何 ----
 pub use ray::{Ray, SurfaceHit};
 
-
+pub use film::{Film, AdaptiveFilm, FilmWithVisibleSurface};
+pub use material::{Material, BSDFBuilder, BXDFBuilder};
+pub use scene::Scene;

@@ -28,17 +28,19 @@ pub mod world;
 pub mod volume;
 // ── common 重导出 ──
 
+
 pub use common::{
     DataError, EntityId, FieldExpr, FieldId, MeshId, HasMeta, IdMap, LightId, MaterialId,
     Meta, Node, NodeId, NodeInput, NodeOutput, Param, Rect, TextureId, Transform, Value, VolumeId,
-    InstanceId,
+    InstanceId, Rgb, Image
 };
+
 pub use volume::{VolumeBounds, VolumeData, VolumeInstance};
 pub use world::WorldData;
 
 // ── geometry 重导出 ──
 
-pub use geometry::{AttributeBuffer, AttributeValues, Mesh, SubMesh};
+pub use geometry::{AttributeBuffer, AttributeValues, Mesh, SubMesh, VisibleSurface, Aabb};
 
 // ── shading 重导出 ──
 

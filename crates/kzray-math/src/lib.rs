@@ -5,5 +5,6 @@ pub mod dist;
 pub mod onb;
 pub mod sampling;
 pub mod fresnel;
+pub mod filter;
 
 pub mod microfacet;
