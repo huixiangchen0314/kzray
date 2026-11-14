@@ -5,3 +5,6 @@ pub mod material;
 pub mod light;
 pub mod geometry;
 pub mod scene;
+pub mod integrator;
+pub mod render;
+pub mod util;

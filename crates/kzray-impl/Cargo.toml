@@ -14,3 +14,4 @@ rayon.workspace = true
 rand.workspace = true
 rand_pcg.workspace = true
 rand_core.workspace = true
+image.workspace = true

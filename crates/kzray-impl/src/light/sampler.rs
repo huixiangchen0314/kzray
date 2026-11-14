@@ -15,9 +15,7 @@
 //! 调用方通过 `Scene::light(id)` 查 `&dyn Light<S>` 再调 `sample_li`。
 //! 所以采样器只需要 `Vec<LightId>` + 概率表。
 
-use kzray_abs::light::{
-    LightSampleContext, LightSelection, LightSampler,
-};
+use kzray_abs::light::{LightSampleContext, LightSampler, LightSelection};
 use kzray_abs::sampler::Sampler;
 use kzray_data::common::LightId;
 
@@ -59,10 +57,10 @@ impl UniformLightSampler {
 }
 
 impl LightSampler for UniformLightSampler {
-    fn sample(
+    fn sample<SM: Sampler>(
         &self,
         _ctx: &LightSampleContext,
-        sampler: &mut impl Sampler,
+        sampler: &mut SM,
         dimension: u32,
     ) -> Option<LightSelection> {
         if self.light_ids.is_empty() {
@@ -137,10 +135,16 @@ impl PowerLightSampler {
     /// - `weights` 为空；
     /// - 所有 `weight` 之和为 0。
     pub fn from_weights(weights: Vec<(LightId, f32)>) -> Self {
-        assert!(!weights.is_empty(), "PowerLightSampler needs at least one light");
+        assert!(
+            !weights.is_empty(),
+            "PowerLightSampler needs at least one light"
+        );
 
         let total: f32 = weights.iter().map(|(_, w)| *w).sum();
-        assert!(total > 0.0, "PowerLightSampler total weight must be positive");
+        assert!(
+            total > 0.0,
+            "PowerLightSampler total weight must be positive"
+        );
 
         let mut light_ids = Vec::with_capacity(weights.len());
         let mut cdf = Vec::with_capacity(weights.len());
@@ -169,10 +173,10 @@ impl PowerLightSampler {
 }
 
 impl LightSampler for PowerLightSampler {
-    fn sample(
+    fn sample<SM: Sampler>(
         &self,
         _ctx: &LightSampleContext,
-        sampler: &mut impl Sampler,
+        sampler: &mut SM,
         dimension: u32,
     ) -> Option<LightSelection> {
         if self.light_ids.is_empty() {
@@ -296,10 +300,8 @@ mod tests {
 
     #[test]
     fn power_pdf_proportional_to_weight() {
-        let s = PowerLightSampler::from_weights(vec![
-            (LightId::from(1), 3.0),
-            (LightId::from(2), 1.0),
-        ]);
+        let s =
+            PowerLightSampler::from_weights(vec![(LightId::from(1), 3.0), (LightId::from(2), 1.0)]);
         // 概率 0.75 / 0.25
         assert!((s.pdf(&ctx(), LightId::from(1)) - 0.75).abs() < 1e-6);
         assert!((s.pdf(&ctx(), LightId::from(2)) - 0.25).abs() < 1e-6);
@@ -322,8 +324,8 @@ mod tests {
     #[test]
     fn power_sample_respects_cdf() {
         let s = PowerLightSampler::from_weights(vec![
-            (LightId::from(1), 1.0),  // pdf 0.5, cdf [0, 0.5]
-            (LightId::from(2), 1.0),  // pdf 0.5, cdf [0.5, 1.0]
+            (LightId::from(1), 1.0), // pdf 0.5, cdf [0, 0.5]
+            (LightId::from(2), 1.0), // pdf 0.5, cdf [0.5, 1.0]
         ]);
 
         // u=0.2 → 选 1
@@ -341,7 +343,7 @@ mod tests {
     fn power_zero_weight_excluded() {
         let s = PowerLightSampler::from_weights(vec![
             (LightId::from(1), 1.0),
-            (LightId::from(2), 0.0),  // 排除
+            (LightId::from(2), 0.0), // 排除
         ]);
         assert_eq!(s.len(), 1);
         assert_eq!(s.pdf(&ctx(), LightId::from(2)), 0.0);
@@ -356,19 +358,14 @@ mod tests {
     #[test]
     #[should_panic(expected = "total weight must be positive")]
     fn power_all_zero_weights_panics() {
-        PowerLightSampler::from_weights(vec![
-            (LightId::from(1), 0.0),
-            (LightId::from(2), 0.0),
-        ]);
+        PowerLightSampler::from_weights(vec![(LightId::from(1), 0.0), (LightId::from(2), 0.0)]);
     }
 
     #[test]
     fn power_u_boundary() {
         // u 接近 1.0，partition_point 可能返回 len，需兜底
-        let s = PowerLightSampler::from_weights(vec![
-            (LightId::from(1), 1.0),
-            (LightId::from(2), 1.0),
-        ]);
+        let s =
+            PowerLightSampler::from_weights(vec![(LightId::from(1), 1.0), (LightId::from(2), 1.0)]);
         let mut sampler = FixedSampler { value: 0.9999999 };
         let sel = s.sample(&ctx(), &mut sampler, 0);
         assert!(sel.is_some());

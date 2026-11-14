@@ -132,7 +132,7 @@
 //! 下调用（如光子映射的光子沉积）。这是实现层的选择，契约层不约束
 //! ——`Integrator` 的实现可以持有 `&dyn Film`，也可以不持有。
 
-use crate::light::LightSampler;
+use crate::light::{InfiniteLight, Light, LightSampler};
 use crate::ray::Ray;
 use crate::sampler::Sampler;
 use crate::scene::Scene;
@@ -162,10 +162,13 @@ use crate::spectrum::SpectralAlgebra;
 /// `li` 不持有 `scene` / `ray` / `sampler` 的引用，只读/借用它们。
 /// 积分器内部可以创建临时状态（路径栈、子路径、MIS 权重数组），
 /// 但生命周期不超出 `li` 的调用。
-pub trait Integrator<S, LS>: Send + Sync
+pub trait Integrator<S, LS, SC, L, IL>: Send + Sync
 where
     S: SpectralAlgebra,
     LS: LightSampler,
+    SC: Scene<S, LS, L, IL>,
+    L: Light<S>,
+    IL: InfiniteLight<S>,
 {
     /// 计算沿 `ray` 到达的辐射亮度。
     ///
@@ -217,11 +220,12 @@ where
     /// `self` 的可变状态——需要缓存的算法（光子图、预计算表）在构造期
     /// 初始化，运行时只读；需要运行时更新的状态用 `Mutex` / `RwLock`
     /// 保护或使用独立契约（见模块文档"`Send + Sync` 与内部状态"）。
-    fn li(
+    fn li<SM: Sampler>(
         &self,
-        scene: &dyn Scene<S, LS>,
+        scene: &SC,
         ray: &Ray,
-        sampler: &mut dyn Sampler,
+        sampler: &mut SM,
+        start_dim: u32,
         wavelengths: &S::WavelengthContext,
     ) -> S;
 }
@@ -253,117 +257,145 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::light::{LightSampleContext, LightSelection};
+    use crate::light::{
+        InfiniteLight, LeSample, LiSample, Light, LightSampleContext, LightSelection, LightType,
+    };
     use crate::material::Material;
     use crate::ray::SurfaceHit;
     use crate::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
+    use crate::ScalarAlgebra;
+    use glam::{UVec2, Vec2, Vec3};
     use kzray_data::common::LightId;
     use kzray_data::geometry::Aabb;
     use std::ops::Range;
 
-    // ─────────── 测试桩 ───────────
+    struct TestSampler;
+    impl Sampler for TestSampler {
+        fn start_pixel_sample(&mut self, _: UVec2, _: u32) {}
+        fn next_f32(&mut self, _: u32) -> f32 {
+            0.5
+        }
+    }
 
     struct EmptyLightSampler;
-
     impl LightSampler for EmptyLightSampler {
-        fn sample(
+        fn sample<SM: Sampler>(
             &self,
             _ctx: &LightSampleContext,
-            _sampler: &mut impl Sampler,
-            _dim: u32
+            _sampler: &mut SM,
+            _dim: u32,
         ) -> Option<LightSelection> {
             None
         }
-
-        fn pdf(&self, _ctx: &LightSampleContext, _light_id: LightId) -> f32 {
+        fn pdf(&self, _ctx: &LightSampleContext, _id: LightId) -> f32 {
             0.0
         }
-
         fn max_sample_dimensions(&self) -> u32 {
             1
         }
     }
 
-    struct EmptyScene;
-
-    impl Scene<SpectrumRgb, EmptyLightSampler> for EmptyScene {
-        fn bounds(&self) -> Aabb {
-            Aabb::empty()
+    struct EmptyLight;
+    impl Light<SpectrumRgb> for EmptyLight {
+        fn light_type(&self) -> LightType {
+            LightType::DeltaPosition
         }
-
-        fn intersect(&self, _ray: &Ray, _t_range: Range<f32>) -> Option<SurfaceHit> {
-            None
-        }
-
-        fn intersect_p(&self, _ray: &Ray, _t_range: Range<f32>) -> bool {
-            false
-        }
-
-        fn material(&self, _hit: &SurfaceHit) -> Option<&Material<SpectrumRgb>> {
-            None
-        }
-
-        fn light(&self, _id: LightId) -> Option<&dyn crate::light::Light<SpectrumRgb>> {
-            None
-        }
-
-        fn light_sampler(&self) -> Option<&EmptyLightSampler> {
-            None
-        }
-
-        fn infinite_light(&self) -> Option<&dyn crate::light::InfiniteLight<SpectrumRgb>> {
-            None
-        }
-    }
-
-    struct TestSampler;
-
-    impl Sampler for TestSampler {
-        fn next_f32(&mut self, _dimension: u32) -> f32 {
-            0.5
-        }
-
-        fn start_pixel_sample(&mut self, _pixel: glam::UVec2, _sample_index: u32) {
-
-        }
-    }
-
-    // ─────────── 测试用积分器 ───────────
-
-    /// 常数积分器：无论输入如何，返回固定值。
-    /// 用于验证签名、object-safety、`Send + Sync`。
-    struct ConstantIntegrator {
-        value: SpectrumRgb,
-    }
-
-    impl Integrator<SpectrumRgb, EmptyLightSampler> for ConstantIntegrator {
-        fn li(
+        fn sample_li(
             &self,
-            _scene: &dyn Scene<SpectrumRgb, EmptyLightSampler>,
-            _ray: &Ray,
-            _sampler: &mut dyn Sampler,
-            _wavelengths: &NoWavelengths,
-        ) -> SpectrumRgb {
-            self.value
+            _: &LightSampleContext,
+            _: Vec2,
+            _: &NoWavelengths,
+        ) -> Option<LiSample<SpectrumRgb>> {
+            None
         }
-    }
-
-    /// 零积分器：永远返回零。用于验证"无贡献"路径。
-    struct ZeroIntegrator;
-
-    impl Integrator<SpectrumRgb, EmptyLightSampler> for ZeroIntegrator {
-        fn li(
-            &self,
-            _scene: &dyn Scene<SpectrumRgb, EmptyLightSampler>,
-            _ray: &Ray,
-            _sampler: &mut dyn Sampler,
-            _wavelengths: &NoWavelengths,
-        ) -> SpectrumRgb {
+        fn pdf_li(&self, _: &LightSampleContext, _: Vec3) -> f32 {
+            0.0
+        }
+        fn phi(&self, _: &NoWavelengths) -> SpectrumRgb {
             SpectrumRgb::ZERO
         }
     }
 
-    // ─────────── 契约测试 ───────────
+    struct EmptyInfiniteLight;
+    impl InfiniteLight<SpectrumRgb> for EmptyInfiniteLight {
+        fn emitted_radiance(&self, _: &Ray, _: &NoWavelengths) -> SpectrumRgb {
+            SpectrumRgb::ZERO
+        }
+        fn sample_le(&self, _: Vec2, _: &NoWavelengths) -> Option<LeSample<SpectrumRgb>> {
+            None
+        }
+        fn pdf_le(&self, _: Vec3, _: &NoWavelengths) -> f32 {
+            0.0
+        }
+    }
+    impl Light<SpectrumRgb> for EmptyInfiniteLight {
+        fn light_type(&self) -> LightType {
+            LightType::Infinite
+        }
+        fn sample_li(
+            &self,
+            _: &LightSampleContext,
+            _: Vec2,
+            _: &NoWavelengths,
+        ) -> Option<LiSample<SpectrumRgb>> {
+            None
+        }
+        fn pdf_li(&self, _: &LightSampleContext, _: Vec3) -> f32 {
+            0.0
+        }
+        fn phi(&self, _: &NoWavelengths) -> SpectrumRgb {
+            SpectrumRgb::ZERO
+        }
+    }
+
+    struct EmptyScene;
+    impl Scene<SpectrumRgb, EmptyLightSampler, EmptyLight, EmptyInfiniteLight> for EmptyScene {
+        fn bounds(&self) -> Aabb {
+            Aabb::empty()
+        }
+        fn intersect(&self, _: &Ray, _: Range<f32>) -> Option<SurfaceHit> {
+            None
+        }
+        fn intersect_p(&self, _: &Ray, _: Range<f32>) -> bool {
+            false
+        }
+        fn material(&self, _: &SurfaceHit) -> Option<&Material<SpectrumRgb>> {
+            None
+        }
+        fn light(&self, _: LightId) -> Option<&EmptyLight> {
+            None
+        }
+        fn light_sampler(&self) -> Option<&EmptyLightSampler> {
+            None
+        }
+        fn infinite_light(&self) -> Option<&EmptyInfiniteLight> {
+            None
+        }
+    }
+
+    struct ConstantIntegrator<S> {
+        value: S,
+    }
+
+    impl<S, LS, SC, L, IL> Integrator<S, LS, SC, L, IL> for ConstantIntegrator<S>
+    where
+        S: SpectralAlgebra,
+        LS: LightSampler,
+        SC: Scene<S, LS, L, IL>,
+        L: Light<S>,
+        IL: InfiniteLight<S>,
+    {
+        fn li<SM: Sampler>(
+            &self,
+            _scene: &SC,
+            _ray: &Ray,
+            _sampler: &mut SM,
+            _start_dim: u32,
+            _wl: &S::WavelengthContext,
+        ) -> S {
+            self.value.scale(S::Scalar::from(1.0))
+        }
+    }
 
     #[test]
     fn constant_integrator_returns_value() {
@@ -371,78 +403,15 @@ mod tests {
             value: SpectrumRgb::new(0.5, 0.5, 0.5),
         };
         let scene = EmptyScene;
-        let ray = Ray::new(glam::Vec3::ZERO, glam::Vec3::X, 0.0);
+        let ray = Ray::new(Vec3::ZERO, Vec3::X, 0.0);
         let mut sampler = TestSampler;
-        let result = integrator.li(&scene, &ray, &mut sampler, &NoWavelengths);
+        let result = integrator.li(&scene, &ray, &mut sampler, 0, &NoWavelengths);
         assert_eq!(result, SpectrumRgb::new(0.5, 0.5, 0.5));
-    }
-
-    #[test]
-    fn zero_integrator_returns_zero() {
-        let integrator = ZeroIntegrator;
-        let scene = EmptyScene;
-        let ray = Ray::new(glam::Vec3::ZERO, glam::Vec3::X, 0.0);
-        let mut sampler = TestSampler;
-        let result = integrator.li(&scene, &ray, &mut sampler, &NoWavelengths);
-        assert_eq!(result, SpectrumRgb::ZERO);
-    }
-
-    #[test]
-    fn integrator_is_object_safe() {
-        // Integrator<S, LS> 是 object-safe 的
-        let _: Box<dyn Integrator<SpectrumRgb, EmptyLightSampler>> =
-            Box::new(ConstantIntegrator {
-                value: SpectrumRgb::ONE,
-            });
     }
 
     #[test]
     fn integrator_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<ConstantIntegrator>();
-        assert_send_sync::<ZeroIntegrator>();
-    }
-
-    #[test]
-    fn integrator_works_with_dyn_scene() {
-        // 验证 &dyn Scene<S, LS> 作为参数可用
-        let integrator: Box<dyn Integrator<SpectrumRgb, EmptyLightSampler>> =
-            Box::new(ConstantIntegrator {
-                value: SpectrumRgb::new(1.0, 0.0, 0.0),
-            });
-        let scene: Box<dyn Scene<SpectrumRgb, EmptyLightSampler>> = Box::new(EmptyScene);
-        let ray = Ray::new(glam::Vec3::ZERO, glam::Vec3::X, 0.0);
-        let mut sampler = TestSampler;
-        let result = integrator.li(scene.as_ref(), &ray, &mut sampler, &NoWavelengths);
-        assert_eq!(result, SpectrumRgb::new(1.0, 0.0, 0.0));
-    }
-
-    #[test]
-    fn integrator_parallel_calls() {
-        // 验证 &self 可多线程并行调用（Send + Sync 的实践含义）
-        use std::sync::Arc;
-        use std::thread;
-
-        let integrator: Arc<dyn Integrator<SpectrumRgb, EmptyLightSampler>> =
-            Arc::new(ConstantIntegrator {
-                value: SpectrumRgb::ONE,
-            });
-        let scene: Arc<dyn Scene<SpectrumRgb, EmptyLightSampler>> = Arc::new(EmptyScene);
-
-        let mut handles = vec![];
-        for _ in 0..4 {
-            let integrator = Arc::clone(&integrator);
-            let scene = Arc::clone(&scene);
-            handles.push(thread::spawn(move || {
-                let ray = Ray::new(glam::Vec3::ZERO, glam::Vec3::X, 0.0);
-                let mut sampler = TestSampler;
-                integrator.li(scene.as_ref(), &ray, &mut sampler, &NoWavelengths)
-            }));
-        }
-
-        for h in handles {
-            let result = h.join().unwrap();
-            assert_eq!(result, SpectrumRgb::ONE);
-        }
+        assert_send_sync::<ConstantIntegrator<SpectrumRgb>>();
     }
 }

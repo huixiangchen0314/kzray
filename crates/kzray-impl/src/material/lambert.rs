@@ -12,7 +12,6 @@
 //! 如果要单面材质（背面不可见），构造 `LambertBSDFBuilder` 时用
 //! `single_sided(true)`，`build` 时反向 `wo` 返回零 BSDF。
 
-use std::ops::Mul;
 use std::sync::Arc;
 
 use glam::Vec3;

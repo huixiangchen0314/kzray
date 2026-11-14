@@ -605,13 +605,13 @@ pub trait LightSampler: Send + Sync {
     ///   一致。
     ///
     /// 返回的 `LightSelection::consumed` 报告本次采样实际消耗的维度数。
-    fn sample(
+    fn sample<SM: Sampler>(
         &self,
         ctx: &LightSampleContext,
-        sampler: &mut impl Sampler,
+        sampler: &mut SM,
         dimension: u32,
     ) -> Option<LightSelection>;
-
+    
     /// 给定光源 ID，返回选择该光源的概率。
     ///
     /// 用于 MIS 权重计算：`total_pdf = light_pdf * light.pdf_li(...)`。
