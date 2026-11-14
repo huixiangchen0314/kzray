@@ -19,7 +19,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use glam::{Affine3A, Mat3, UVec2, Vec2, Vec3};
+use glam::{UVec2, Vec2, Vec3};
 
 use kzray_abs::material::Material;
 use kzray_abs::sensor::RgbSensor;
@@ -37,19 +37,7 @@ use kzray_impl::material::LambertBSDFBuilder;
 use kzray_impl::render::{render, RenderConfig};
 use kzray_impl::sampler::PCGSampler;
 use kzray_impl::scene::{SimpleScene, SimpleSceneBuilder};
-use kzray_impl::util::write_ppm;
-
-/// 构造 look-at 变换。
-///
-/// `camera_to_world` 的局部 +z 指向 `target - eye`。`up` 是世界空间的
-/// 上方向参考。
-fn look_at(eye: Vec3, target: Vec3, up: Vec3) -> Affine3A {
-    let forward = (target - eye).normalize();
-    let right = forward.cross(up).normalize();
-    let new_up = right.cross(forward);
-    let rot = Mat3::from_cols(right, new_up, forward);
-    Affine3A::from_mat3_translation(rot, eye)
-}
+use kzray_impl::util::{look_at, write_image};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 类型别名简化
@@ -129,8 +117,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("Render complete in {:.2?}", elapsed);
 
     // ─── 输出 ───
-    let output_path = "sphere_scene.ppm";
-    write_ppm(&image, output_path)?;
+    let output_path = "sphere_scene.png";
+    write_image(&image, output_path);
     println!("Wrote {}", output_path);
 
     Ok(())

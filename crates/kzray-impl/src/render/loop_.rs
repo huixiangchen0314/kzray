@@ -44,7 +44,6 @@ use kzray_abs::spectrum::SpectralAlgebra;
 
 use kzray_data::Image;
 
-use crate::sampler::PCGSampler;
 
 // ═══════════════════════════════════════════════════════════════
 // RenderConfig

@@ -20,5 +20,5 @@ rayon = "1.10"
 rand = "0.10"          
 rand_pcg = "0.10"
 rand_core = "0.10"
-image = "0.25"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "pnm"] }
 thiserror = "1"

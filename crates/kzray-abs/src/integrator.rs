@@ -263,7 +263,6 @@ mod tests {
     use crate::material::Material;
     use crate::ray::SurfaceHit;
     use crate::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
-    use crate::ScalarAlgebra;
     use glam::{UVec2, Vec2, Vec3};
     use kzray_data::common::LightId;
     use kzray_data::geometry::Aabb;

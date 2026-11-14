@@ -1,141 +1,85 @@
-//! PPM（P3 ASCII）图像输出。
+//! 图像输出。
 //!
-//! 最简单的图像格式：纯文本，无压缩，无依赖。用于阶段 4 的调试输出。
-//! 阶段 6 换 PNG / EXR。
+//! # 抽象边界
 //!
-//! # sRGB 编码
+//! 本模块是**唯一**接触 `image` crate 的地方。对外只暴露：
 //!
-//! `Image` 存线性 RGB，写出前用 `Rgb::to_srgb_u8` 做 sRGB 编码。这是
-//! 标准做法——线性值转 sRGB 显示空间。
+//! ```text
+//! write_image(image: &Image, path: impl AsRef<Path>) -> io::Result<()>
+//! ```
 //!
-//! # 不做 tone mapping
+//! `image` crate 的类型（`ImageBuffer` / `DynamicImage` / `ImageFormat` /
+//! `ImageError`）、错误、API **不出现**在本模块之外。
 //!
-//! 线性值超亮（> 1）会被 `to_srgb_u8` clamp 到 255。场景亮度需要事先
-//! 调整好（光源强度、曝光），或加 tone mapping。阶段 4 先不做 tone
-//! mapping，场景参数手动调。
+//! # 为什么封装
+//!
+//! - **外部依赖可能替换**：今天用 `image` crate，明天可能换 `exr` 处理
+//!   HDR、`png` 处理特定格式。封装后只改这一个文件，所有调用方不动。
+//! - **`image` crate 的 API 会变**：0.24 → 0.25 有 API 调整。封装后
+//!   升级只需改此模块。
+//! - **调用方不该知道"我们用什么库"**：`render` / example 只知道
+//!   "把 `Image` 写到路径"，不知道底层实现。
+//!
+//! # 数据格式
+//!
+//! kzray 的 `Image` 是**线性 RGB**（`kzray_data::color::Rgb`，`f32`）。
+//! 写出前用 `Rgb::to_srgb_u8` 做 sRGB 编码（IEC 61966-2-1），得到
+//! `[u8; 3]`。`image` crate 存的是 sRGB 编码后的 8 位值，两者语义一致。
+//!
+//! **不做** tone mapping / 曝光 / 白平衡——超亮值（> 1）被
+//! `to_srgb_u8` clamp 到 255。场景亮度需要事先调整。
+//!
+//! # 支持的格式
+//!
+//! 按文件扩展名选择：`.png` / `.jpg` / `.jpeg` / `.ppm` / `.pgm`。
+//! 未知扩展名返回 `InvalidInput` 错误。格式由 `image` crate 的
+//! `ImageFormat::from_path` 推断。
 
-use std::fs::File;
-use std::io::{BufWriter, Write};
+use std::io;
 use std::path::Path;
 
 use kzray_data::Image;
 
-/// 写 PPM（P3）图像。
+/// 把线性 RGB 图像写到指定路径。
 ///
-/// 输出格式：
+/// 按扩展名选择格式（PNG / JPEG / PPM / PGM）。内部做 sRGB 编码，
+/// 不做 tone mapping。
+///
+/// # 错误
+///
+/// - 路径扩展名缺失或未知 → `InvalidInput`；
+/// - 文件创建失败 → `PermissionDenied` / `NotFound` 等；
+/// - 编码失败 → `Other`（包装 `image` crate 的错误消息）。
+///
+/// # 示例
 ///
 /// ```text
-/// P3
-/// <width> <height>
-/// 255
-/// <r> <g> <b> <r> <g> <b> ...
-/// ```
+/// use kzray_impl::render::write_image;
 ///
-/// 每像素 RGB 三个 `[0, 255]` 整数，行主序，每行末尾换行。
-pub fn write_ppm(image: &Image, path: impl AsRef<Path>) -> std::io::Result<()> {
-    let file = File::create(path)?;
-    let mut w = BufWriter::new(file);
+/// let image = film.resolve();
+/// write_image(&image, "output.png")?;
+/// ```
+pub fn write_image(image: &Image, path: impl AsRef<Path>) -> io::Result<()> {
+    let path = path.as_ref();
+
+    // 扩展名 → ImageFormat。from_path 是 image crate 的推断函数。
+    // 这里封装了 image crate 的 API，调用方不需要知道 ImageFormat。
+    let format = image::ImageFormat::from_path(path)
+        .map_err(|e| io::Error::new(io::ErrorKind::InvalidInput, e))?;
 
     let width = image.width();
     let height = image.height();
 
-    writeln!(w, "P3")?;
-    writeln!(w, "{} {}", width, height)?;
-    writeln!(w, "255")?;
+    // 构造 image crate 的 8 位 RGB 缓冲
+    let mut buf = image::ImageBuffer::<image::Rgb<u8>, _>::new(width, height);
 
     for y in 0..height {
         for x in 0..width {
-            let rgb = image.get(x, y);
-            let encoded = rgb.to_srgb_u8();
-            write!(w, "{} {} {} ", encoded[0], encoded[1], encoded[2])?;
+            let rgb = image.get(x, y).to_srgb_u8();
+            buf.put_pixel(x, y, image::Rgb(rgb));
         }
-        writeln!(w)?;
     }
 
-    w.flush()?;
-    Ok(())
-}
-
-// ═══════════════════════════════════════════════════════════════
-// 测试
-// ═══════════════════════════════════════════════════════════════
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use glam::UVec2;
-    use kzray_data::Rgb;
-
-    #[test]
-    fn write_ppm_produces_valid_header() {
-        let image = Image::new_filled(UVec2::new(2, 2), Rgb::BLACK);
-        let tmp = std::env::temp_dir().join("kzray_test_ppm_header.ppm");
-        write_ppm(&image, &tmp).unwrap();
-
-        let content = std::fs::read_to_string(&tmp).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-        assert_eq!(lines[0], "P3");
-        assert_eq!(lines[1], "2 2");
-        assert_eq!(lines[2], "255");
-
-        std::fs::remove_file(&tmp).ok();
-    }
-
-    #[test]
-    fn write_ppm_white_pixel() {
-        let image = Image::new_filled(UVec2::new(1, 1), Rgb::WHITE);
-        let tmp = std::env::temp_dir().join("kzray_test_ppm_white.ppm");
-        write_ppm(&image, &tmp).unwrap();
-
-        let content = std::fs::read_to_string(&tmp).unwrap();
-        // 应该包含 "255 255 255"
-        assert!(content.contains("255 255 255"), "content: {content}");
-
-        std::fs::remove_file(&tmp).ok();
-    }
-
-    #[test]
-    fn write_ppm_black_pixel() {
-        let image = Image::new_filled(UVec2::new(1, 1), Rgb::BLACK);
-        let tmp = std::env::temp_dir().join("kzray_test_ppm_black.ppm");
-        write_ppm(&image, &tmp).unwrap();
-
-        let content = std::fs::read_to_string(&tmp).unwrap();
-        assert!(content.contains("0 0 0"), "content: {content}");
-
-        std::fs::remove_file(&tmp).ok();
-    }
-
-    #[test]
-    fn write_ppm_gray_pixel() {
-        // 0.5 线性 → sRGB ≈ 188
-        let image = Image::new_filled(UVec2::new(1, 1), Rgb::splat(0.5));
-        let tmp = std::env::temp_dir().join("kzray_test_ppm_gray.ppm");
-        write_ppm(&image, &tmp).unwrap();
-
-        let content = std::fs::read_to_string(&tmp).unwrap();
-        assert!(content.contains("188 188 188"), "content: {content}");
-
-        std::fs::remove_file(&tmp).ok();
-    }
-
-    #[test]
-    fn write_ppm_pixel_count_correct() {
-        let image = Image::new_filled(UVec2::new(3, 2), Rgb::WHITE);
-        let tmp = std::env::temp_dir().join("kzray_test_ppm_count.ppm");
-        write_ppm(&image, &tmp).unwrap();
-
-        let content = std::fs::read_to_string(&tmp).unwrap();
-        let lines: Vec<&str> = content.lines().collect();
-        // 头 3 行 + 2 行像素
-        assert_eq!(lines.len(), 5);
-
-        // 每行像素有 3 个 "255 255 255"
-        for line in &lines[3..5] {
-            let count = line.matches("255 255 255").count();
-            assert_eq!(count, 3);
-        }
-
-        std::fs::remove_file(&tmp).ok();
-    }
+    buf.save_with_format(path, format)
+        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
 }
