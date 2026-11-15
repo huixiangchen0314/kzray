@@ -32,7 +32,7 @@ pub use sensor::{RgbSensor, CieSensor};
 pub use sampler::Sampler;
 
 // ---- 几何 ----
-pub use ray::{Ray, SurfaceHit};
+pub use ray::{Ray, SurfaceHit, Hit, AreaLightHit};
 
 pub use film::{Film, AdaptiveFilm, FilmWithVisibleSurface};
 pub use material::{Material, BSDFBuilder, BXDFBuilder};
@@ -82,3 +82,5 @@ pub use texture::{
 };
 
 pub use library::Library;
+
+pub use light::{Light, AreaLight, AreaLightBackface};

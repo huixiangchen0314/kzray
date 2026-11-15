@@ -1,72 +1,86 @@
-//! kzray-impl/src/scene/simple.rs  简单场景。
-//!
-//! 几何求交委托给 [`BruteForce`]；材质按 `InstanceId` 索引查表。
-//! `Library<S>` 统一持有网格、纹理（alpha 等）；`SimpleScene<S, ...>`
-//! 泛型只影响材质与光源，加速层通过方法级 `S` 接收 `&Library<S>`。
+//! kzray-impl/src/scene/simple.rs
 
+use std::collections::BTreeMap;
 use std::ops::Range;
 
 use glam::Affine3A;
-
-use kzray_abs::light::{InfiniteLight, Light, LightSampler};
+use kzray_abs::light::{AreaLight, InfiniteLight, Light, LightSampler};
 use kzray_abs::material::Material;
-use kzray_abs::ray::{Ray, SurfaceHit};
+use kzray_abs::ray::{AreaLightHit, Hit, Ray, SurfaceHit};
 use kzray_abs::scene::Scene;
 use kzray_abs::spectrum::SpectralAlgebra;
 use kzray_abs::Library;
+use kzray_data::TextureId;
 use kzray_data::common::{InstanceId, LightId};
 use kzray_data::geometry::Aabb;
-use kzray_data::TextureId;
 
-use crate::accel::instance::ShapeInstance;
-use crate::accel::{Accelerator, BruteForce, Hit, InstanceHit, Primitive};
+use crate::accel::ShapeInstance;
+use crate::accel::{Accelerator, BruteForce, InstanceHit, Primitive, PrimitiveHit};
 use crate::geometry::{AnyShapeA, Plane, Sphere};
 
 // ═══════════════════════════════════════════════════════════════
 // SimpleScene
 // ═══════════════════════════════════════════════════════════════
 
-pub struct SimpleScene<S, LS, L, IL>
+/// 简单场景。`DL` / `IL` / `AL` 三个光源泛型完全独立——用户可分别
+/// 替换为自定义光源类型。
+///
+/// # 存储布局
+///
+/// - `delta_lights: BTreeMap<LightId, DL>`——delta 光源，按 id 查
+///   （NEE 采样器选中后按 id 找）；
+/// - `area_lights: BTreeMap<LightId, AL>`——面积光，按 id 查（同 NEE）；
+/// - `infinite_lights: Vec<IL>`——无限远光源，**无 id**。环境光 / 天空
+///   光通常是全局的，不需要被"选中某一个"——所有逃逸光线求辐射亮度时
+///   遍历求和。NEE 通常不采样无限远光源（无有限 pdf 测度），逃逸时
+///   直接累加即可。
+///
+/// `LightId` 由 `SimpleSceneBuilder` 全局分配，只用于 delta / 面积光，
+/// 两类 id 不重叠。
+pub struct SimpleScene<S, LS, DL, IL, AL>
 where
     S: SpectralAlgebra,
     LS: LightSampler,
-    L: Light<S>,
+    DL: Light<S>,
     IL: InfiniteLight<S>,
+    AL: AreaLight<S>,
 {
     bounds: Aabb,
-    /// 几何求交的加速结构。不泛型——不感知材质/谱。
     accelerator: BruteForce,
-    /// 统一数据资产表（网格、纹理）。求交层通过它查 alpha 纹理。
     library: Library<S>,
-    /// 材质表，按 `InstanceId` 索引。与 `accelerator` 内的实例顺序一致。
     materials: Vec<Material<S>>,
-    lights: Vec<L>,
+    delta_lights: BTreeMap<LightId, DL>,
+    area_lights: BTreeMap<LightId, AL>,
+    infinite_lights: Vec<IL>,
     light_sampler: Option<LS>,
-    infinite_light: Option<IL>,
 }
 
-impl<S, LS, L, IL> Scene<S, LS, L, IL> for SimpleScene<S, LS, L, IL>
+impl<S, LS, DL, IL, AL> Scene<S, LS, DL, IL, AL> for SimpleScene<S, LS, DL, IL, AL>
 where
     S: SpectralAlgebra,
     LS: LightSampler,
-    L: Light<S>,
+    DL: Light<S>,
     IL: InfiniteLight<S>,
+    AL: AreaLight<S>,
 {
     fn bounds(&self) -> Aabb {
         self.bounds
     }
 
-    fn library(&self) -> &Library<S> {
-        &self.library
-    }
-
-    fn intersect(&self, ray: &Ray, t_range: Range<f32>) -> Option<SurfaceHit> {
-        let hit = self.accelerator.test(ray, t_range, &self.library)?;
-        match hit {
-            Hit::Instance(InstanceHit::Shape(instance_id, shape_hit)) => {
-                // prim_id 对解析形状恒为 0；mesh 落地后从 InstanceHit 取真实索引。
-                Some(shape_hit.into_surface_hit_prim(instance_id))
+    fn intersect(&self, ray: &Ray, t_range: Range<f32>) -> Option<Hit> {
+        let prim_hit = self.accelerator.test(ray, t_range, &self.library)?;
+        match prim_hit {
+            PrimitiveHit::Instance(InstanceHit::Shape(instance_id, shape_hit)) => {
+                Some(Hit::Surface(shape_hit.into_surface_hit_prim(instance_id)))
             }
+            PrimitiveHit::Instance(InstanceHit::AreaLight(
+                instance_id,
+                light_id,
+                shape_hit,
+            )) => Some(Hit::AreaLight(AreaLightHit {
+                hit: shape_hit.into_surface_hit_prim(instance_id),
+                light_id,
+            })),
         }
     }
 
@@ -79,16 +93,27 @@ where
         self.materials.get(idx)
     }
 
-    fn light(&self, id: LightId) -> Option<&L> {
-        self.lights.get(id.as_u64() as usize)
+    #[inline]
+    fn delta_light(&self, id: LightId) -> Option<&DL> {
+        self.delta_lights.get(&id)
+    }
+
+    #[inline]
+    fn area_light(&self, id: LightId) -> Option<&AL> {
+        self.area_lights.get(&id)
+    }
+
+    #[inline]
+    fn infinite_lights(&self) -> &[IL] {
+        &self.infinite_lights
     }
 
     fn light_sampler(&self) -> Option<&LS> {
         self.light_sampler.as_ref()
     }
 
-    fn infinite_light(&self) -> Option<&IL> {
-        self.infinite_light.as_ref()
+    fn library(&self) -> &Library<S> {
+        &self.library
     }
 }
 
@@ -96,64 +121,64 @@ where
 // SimpleSceneBuilder
 // ═══════════════════════════════════════════════════════════════
 
-pub struct SimpleSceneBuilder<S, LS, L, IL>
+pub struct SimpleSceneBuilder<S, LS, DL, IL, AL>
 where
     S: SpectralAlgebra,
     LS: LightSampler,
-    L: Light<S>,
+    DL: Light<S>,
     IL: InfiniteLight<S>,
+    AL: AreaLight<S>,
 {
     primitives: Vec<Primitive>,
     library: Library<S>,
     materials: Vec<Material<S>>,
-    lights: Vec<L>,
+    delta_lights: BTreeMap<LightId, DL>,
+    area_lights: BTreeMap<LightId, AL>,
+    infinite_lights: Vec<IL>,
+    /// 全局 `LightId` 计数器。delta 和面积光共用，保证 id 不重叠。
+    /// 无限远光源不占用 id——它们按位置索引。
+    next_light_id: u64,
     light_sampler: Option<LS>,
-    infinite_light: Option<IL>,
     explicit_bounds: Option<Aabb>,
 }
 
-impl<S, LS, L, IL> SimpleSceneBuilder<S, LS, L, IL>
+impl<S, LS, DL, IL, AL> SimpleSceneBuilder<S, LS, DL, IL, AL>
 where
     S: SpectralAlgebra,
     LS: LightSampler,
-    L: Light<S>,
+    DL: Light<S>,
     IL: InfiniteLight<S>,
+    AL: AreaLight<S>,
 {
     pub fn new() -> Self {
-        SimpleSceneBuilder {
+        Self {
             primitives: Vec::new(),
             library: Library::new(),
             materials: Vec::new(),
-            lights: Vec::new(),
+            delta_lights: BTreeMap::new(),
+            area_lights: BTreeMap::new(),
+            infinite_lights: Vec::new(),
+            next_light_id: 0,
             light_sampler: None,
-            infinite_light: None,
             explicit_bounds: None,
         }
     }
 
-    /// 访问内部 `Library<S>`，用于注册纹理等资源。
-    ///
-    /// 调用方在此注册 alpha 纹理，得到 `TextureId`，再传给
-    /// [`Self::add_shape_with_alpha`]。
     pub fn library_mut(&mut self) -> &mut Library<S> {
         &mut self.library
     }
 
-    /// 用外部已构建的 `Library<S>` 替换内部表。
-    ///
-    /// 场景构建与资源加载分离时使用——先构建 `Library<S>`，再交给
-    /// builder。
     pub fn with_library(mut self, library: Library<S>) -> Self {
         self.library = library;
         self
     }
 
-    /// 添加解析形状实例（静态变换，不透明）。`InstanceId` 与材质表索引一致。
+    // ── 几何 ────────────────────────────────────────────────
+
     pub fn add_shape(&mut self, shape: AnyShapeA, material: Material<S>) -> InstanceId {
         self.add_shape_inner(shape, material, None)
     }
 
-    /// 添加带 alpha cutout 的解析形状实例。
     pub fn add_shape_with_alpha(
         &mut self,
         shape: AnyShapeA,
@@ -174,8 +199,7 @@ where
         if let Some(a) = alpha {
             instance = instance.with_alpha(a);
         }
-        self.primitives
-            .push(Primitive::Instance { shape: instance });
+        self.primitives.push(Primitive::Shape(instance));
         self.materials.push(material);
         id
     }
@@ -188,19 +212,39 @@ where
         self.add_shape(AnyShapeA::Plane(plane.into()), material)
     }
 
-    pub fn add_light(&mut self, light: L) -> LightId {
-        let id = LightId::from(self.lights.len() as u64);
-        self.lights.push(light);
+    // ── 光源 ────────────────────────────────────────────────
+
+    /// 添加 delta 光源（点光源、方向光等）。返回全局唯一的 `LightId`。
+    pub fn add_delta_light(&mut self, light: DL) -> LightId {
+        let id = LightId::from(self.next_light_id);
+        self.next_light_id += 1;
+        self.delta_lights.insert(id, light);
         id
     }
 
-    pub fn with_light_sampler(mut self, sampler: LS) -> Self {
-        self.light_sampler = Some(sampler);
-        self
+    /// 添加面积光。返回全局唯一的 `LightId`，与 delta 光源不重叠。
+    ///
+    /// `AL` 是泛型——用户构造任意实现 `AreaLight<S>` 的类型传入
+    /// （标准实现 `AnyAreaLight::ShapeArea(...)`）。
+    pub fn add_area_light(&mut self, light: AL) -> LightId {
+        let id = LightId::from(self.next_light_id);
+        self.next_light_id += 1;
+        self.area_lights.insert(id, light);
+        id
     }
 
-    pub fn with_infinite_light(mut self, light: IL) -> Self {
-        self.infinite_light = Some(light);
+    /// 添加无限远光源（环境光、天空光等）。**无 id、无返回值**。
+    ///
+    /// 无限远光源是全局的——逃逸光线累加时遍历所有无限远光源求和。
+    /// 通常场景只有一个环境光，但接口允许添加多个（如分层天空光）。
+    pub fn add_infinite_light(&mut self, light: IL) {
+        self.infinite_lights.push(light);
+    }
+
+    // ── 配置 ────────────────────────────────────────────────
+
+    pub fn with_light_sampler(mut self, sampler: LS) -> Self {
+        self.light_sampler = Some(sampler);
         self
     }
 
@@ -209,9 +253,7 @@ where
         self
     }
 
-  
-  
-    pub fn build(self) -> SimpleScene<S, LS, L, IL> {
+    pub fn build(self) -> SimpleScene<S, LS, DL, IL, AL> {
         let bounds = if let Some(b) = self.explicit_bounds {
             b
         } else {
@@ -223,29 +265,27 @@ where
             accelerator,
             library: self.library,
             materials: self.materials,
-            lights: self.lights,
+            delta_lights: self.delta_lights,
+            area_lights: self.area_lights,
+            infinite_lights: self.infinite_lights,
             light_sampler: self.light_sampler,
-            infinite_light: self.infinite_light,
         }
     }
 }
 
-impl<S, LS, L, IL> Default for SimpleSceneBuilder<S, LS, L, IL>
+impl<S, LS, DL, IL, AL> Default for SimpleSceneBuilder<S, LS, DL, IL, AL>
 where
     S: SpectralAlgebra,
     LS: LightSampler,
-    L: Light<S>,
+    DL: Light<S>,
     IL: InfiniteLight<S>,
+    AL: AreaLight<S>,
 {
     fn default() -> Self {
         Self::new()
     }
 }
 
-/// 计算场景整体 AABB。
-///
-/// 任一图元无界（无限平面）时返回 [`Aabb::empty`]，表示"场景没有有限
-/// 包围盒"。上层用 `is_empty()` 判断。
 fn compute_bounds(primitives: &[Primitive]) -> Aabb {
     use crate::accel::Bounded;
     let mut acc = Aabb::empty();

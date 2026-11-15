@@ -431,6 +431,7 @@ pub trait Light<S: SpectralAlgebra>: Send + Sync {
     /// 构造阶段通常使用参考波长/代表值把 `phi` 转成标量；逐路径波长
     /// 采样时选择概率仍固定为构造值，MIS 会修正由此引入的偏差。
     fn phi(&self, wavelengths: &S::WavelengthContext) -> S;
+
 }
 
 /// 面光源能力。
@@ -686,3 +687,25 @@ pub struct LightSelection {
     /// 时用 [`LightSampler::max_sample_dimensions`] 估计。
     pub consumed: u32,
 }
+
+
+/// 面积光背面行为。求交层根据命中面的朝向决定返回哪种 `InstanceHit`。
+///
+/// **与 `light::ShapeAreaLight::two_sided` 的一致性约束**：
+/// - `TwoSided` 要求 `light.two_sided == true`（否则背面命中求 emission
+///   得到 0，视觉上等于背面不发光但遮挡）；
+/// - `Transparent` / `Opaque` 要求 `light.two_sided == false`。
+/// - 构建层需保证一致；`ShapeAreaLight::build()` 辅助方法自动推导。
+#[derive(Clone, Copy, Debug)]
+pub enum AreaLightBackface {
+    /// 背面穿过：求交返回 `None`，光线继续找更远的交点。面积光从背面
+    /// 看完全不可见（不遮挡、不发光）。
+    Transparent,
+    /// 背面也发光：求交返回 `AreaLight` 命中，积分器求 `emitted_radiance`。
+    /// 要求 `light.two_sided == true`。
+    TwoSided,
+    /// 背面退化为普通实例：求交返回 `Shape` 命中（不带 `light_ref`）。
+    /// 积分器当普通表面处理——无材质则 break（黑体，遮挡但不发光）。
+    Opaque,
+}
+

@@ -2,10 +2,11 @@
 //! 加速层：加速结构 + 图元 + 实例 + 资源表。
 
 pub mod accelerator;
-pub mod animated;
+pub mod animated_shape;
 pub mod brute_force;
+pub mod shape;
 pub mod instance;
-
+pub mod shape_area_light;
 // 延后接入，实现后取消注释：
 // pub mod binned_bvh;
 // pub mod mesh;
@@ -20,8 +21,10 @@ pub mod instance;
 // 不在 accel 根上暴露——避免类型爆炸和意外的依赖耦合。
 
 // 加速结构接口与实现
-pub use accelerator::{Accelerator, Bounded, Hit, Primitive};
+pub use accelerator::{Accelerator, Bounded, PrimitiveHit, Primitive};
 pub use brute_force::BruteForce;
 
 // 命中结果与 alpha（上层 shading 阶段消费）
+pub use shape::ShapeInstance;
+pub use animated_shape::AnimatedShapeInstance;
 pub use instance::InstanceHit;

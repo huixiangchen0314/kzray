@@ -8,10 +8,11 @@ use kzray_data::Aabb;
 
 use crate::{
     accel::{
-        animated::AnimatedShapeInstance,
-        instance::{InstanceHit, InstancePrimitive, ShapeInstance},
-    },
-    geometry::RayA,
+        InstanceHit,
+        animated_shape::AnimatedShapeInstance,
+        instance::InstancePrimitive,
+        shape::ShapeInstance,
+    }, geometry::RayA,
 };
 
 // ═══════════════════════════════════════════════════════════════
@@ -26,13 +27,24 @@ pub trait Bounded {
 // Primitive
 // ═══════════════════════════════════════════════════════════════
 
+
 pub enum Primitive {
-    Instance { shape: ShapeInstance },
-    Animated { shape: AnimatedShapeInstance },
+    Shape(ShapeInstance),
+    AnimatedShape(AnimatedShapeInstance),
     // MeshTriangle(MeshTriangle),
 }
 
+/// 加速精确相交结果
+pub enum PrimitiveHit {
+    /// 实例相交结果
+    Instance(InstanceHit),
+    // 网格三角形相交结果
+    // MeshTriangleHit,
+}
+
+
 impl Primitive {
+
     /// 最近命中（世界空间，含 alpha / 动画）。
     ///
     /// `S` 是光谱代数——`Library<S>` 持有光谱纹理（`AlbedoTexture<S>` 等），
@@ -43,12 +55,12 @@ impl Primitive {
         ray: &RayA,
         t_range: Range<f32>,
         lib: &Library<S>,
-    ) -> Option<Hit> {
+    ) -> Option<PrimitiveHit> {
         let instance_hit = match self {
-            Self::Instance { shape } => shape.intersect(ray, t_range, lib)?,
-            Self::Animated { shape } => shape.intersect(ray, t_range, lib)?,
+            Self::Shape(shape) => shape.intersect(ray, t_range, lib)?,
+            Self::AnimatedShape(shape) => shape.intersect(ray, t_range, lib)?,
         };
-        Some(Hit::Instance(instance_hit))
+        Some(PrimitiveHit::Instance(instance_hit))
     }
 
     /// 遮挡查询（世界空间，含 alpha / 动画）。
@@ -59,8 +71,8 @@ impl Primitive {
         lib: &Library<S>,
     ) -> bool {
         match self {
-            Self::Instance { shape } => shape.occluded(ray, t_range, lib),
-            Self::Animated { shape } => shape.occluded(ray, t_range, lib),
+            Self::Shape(shape) => shape.occluded(ray, t_range, lib),
+            Self::AnimatedShape(shape) => shape.occluded(ray, t_range, lib),
         }
     }
 }
@@ -69,8 +81,8 @@ impl Bounded for Primitive {
     #[inline]
     fn bounds(&self) -> Aabb {
         match self {
-            Self::Instance { shape } => shape.bounds(),
-            Self::Animated { shape } => shape.bounds(),
+            Self::Shape( shape ) => shape.bounds(),
+            Self::AnimatedShape(shape)=> shape.bounds(),
         }
     }
 }
@@ -79,15 +91,8 @@ impl Bounded for Primitive {
 // Hit
 // ═══════════════════════════════════════════════════════════════
 
-/// 加速精确相交结果
-pub enum Hit {
-    /// 实例相交结果
-    Instance(InstanceHit),
-    // 网格三角形相交结果
-    // MeshTriangleHit,
-}
 
-impl Hit {
+impl PrimitiveHit {
     /// 命中的仿射参数 `t`。
     #[inline]
     pub fn t(&self) -> f32 {
@@ -113,7 +118,7 @@ pub trait Accelerator {
         ray: &Ray,
         t_range: Range<f32>,
         lib: &Library<S>,
-    ) -> Option<Hit>;
+    ) -> Option<PrimitiveHit>;
 
     /// 遮挡查询：`t_range` 内任意可接受命中存在即 `true`。
     fn occluded<S: SpectralAlgebra>(
@@ -129,5 +134,5 @@ pub trait Accelerator {
         ray: &Ray,
         t_range: Range<f32>,
         lib: &Library<S>,
-    ) -> Vec<Hit>;
+    ) -> Vec<PrimitiveHit>;
 }

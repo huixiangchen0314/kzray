@@ -39,6 +39,9 @@ pub trait ShapeA {
 
 }
 
+
+
+
 /// 图元求交的纯几何结果。
 ///
 /// 不含 `instance_id` / `prim_id`——这两个字段由场景层在求交后填充，

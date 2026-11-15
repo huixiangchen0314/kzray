@@ -1,5 +1,5 @@
 use glam::{Vec2, Vec3};
-use kzray_data::common::InstanceId;
+use kzray_data::{LightId, common::InstanceId};
 use kzray_math::onb::Onb;
 
 // ═══════════════════════════════════════════════════════════════
@@ -87,7 +87,67 @@ impl Ray {
 pub enum Hit {
     Surface(SurfaceHit),
     SurfaceWithDifferentials(SurfaceHitWithDifferentials),
+    /// 面积光表面命中。
+    AreaLight(AreaLightHit),
     // TODO: Curve(CurveHit), Volume(VolumeEvent), ...
+}
+
+impl Hit {
+    /// 如果是表面命中（`Surface` / `SurfaceWithDifferentials` / `AreaLight`），
+    /// 返回 `&SurfaceHit`；未来 `Curve` / `Volume` 变体返回 `None`。
+    ///
+    /// 调用方需要区分"是表面"和"不是表面"：直接 `match` 变体拿具体信息，
+    /// 或 `surface().expect("此处只处理表面命中")` 在明确上下文中取值。
+    #[inline]
+    pub fn surface(&self) -> Option<&SurfaceHit> {
+        match self {
+            Self::Surface(h) => Some(h),
+            Self::SurfaceWithDifferentials(h) => Some(&h.hit),
+            Self::AreaLight(h) => Some(&h.hit),
+            // TODO：
+            // Self::Curve(_) => None,
+            // Self::Volume(_) => None,
+        }
+    }
+
+    /// 命中的仿射参数 `t`。
+    ///
+    /// 所有变体都有 `t`——它是光线的参数，与命中类型无关。`Curve` /
+    /// `Volume` 落地时加对应分支，签名不变。
+    #[inline]
+    pub fn t(&self) -> f32 {
+        match self {
+            Self::Surface(h) => h.t,
+            Self::SurfaceWithDifferentials(h) => h.hit.t,
+            Self::AreaLight(h) => h.hit.t,
+            // TODO：
+            // Self::Curve(h) => h.t,
+            // Self::Volume(h) => h.t,
+        }
+    }
+
+    /// 如果是面积光命中，返回 `LightId`。
+    #[inline]
+    pub fn light_id(&self) -> Option<LightId> {
+        match self {
+            Self::Surface(_) | Self::SurfaceWithDifferentials(_) => None,
+            Self::AreaLight(h) => Some(h.light_id),
+            // TODO：Curve / Volume 默认 None
+        }
+    }
+
+    /// 屏幕空间微分。`Surface` / `AreaLight` 变体无微分，返回 `None`；
+    /// `SurfaceWithDifferentials` 返回 `Some`。
+    ///
+    /// 面积光若未来带 emission texture，需要微分做 MIP——届时加
+    /// `AreaLightWithDifferentials` 变体，本方法补对应分支。
+    #[inline]
+    pub fn differentials(&self) -> Option<&SurfaceDifferentials> {
+        match self {
+            Self::Surface(_) | Self::AreaLight(_) => None,
+            Self::SurfaceWithDifferentials(h) => Some(&h.differentials),
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -338,4 +398,15 @@ pub struct SpawnRayParams {
     pub eta: f32,
     /// 是否为透射（折射）事件。反射事件为 false。
     pub is_transmission: bool,
+}
+
+
+#[derive(Clone, Copy, Debug)]
+pub struct AreaLightHit {
+    /// 面积光表面的几何命中。字段与 [`SurfaceHit`] 完全同构——面积光
+    /// 也需要几何信息（位置、法线、UV、instance_id），用于 emission 求值、
+    /// 偏移、可选材质查询。
+    pub hit: SurfaceHit,
+    /// 面积光对应的光源 ID。积分器用它查 `Light` 求 `emitted_radiance`。
+    pub light_id: LightId,
 }

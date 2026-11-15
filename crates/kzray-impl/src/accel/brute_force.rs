@@ -9,7 +9,7 @@ use kzray_data::Aabb;
 use crate::{
     accel::{
         Accelerator, Bounded,
-        accelerator::{Hit, Primitive},
+        accelerator::{PrimitiveHit, Primitive},
     },
     geometry::RayA,
 };
@@ -54,13 +54,13 @@ impl Accelerator for BruteForce {
         ray: &Ray,
         t_range: Range<f32>,
         lib: &Library<S>,
-    ) -> Option<Hit> {
+    ) -> Option<PrimitiveHit> {
         // 整体 AABB 快速剔除：光线与场景无交，直接返回。
         self.bounds
             .intersect_range(ray.origin, ray.dir, t_range.clone())?;
 
         let ray_a = RayA::from(*ray);
-        let mut best: Option<Hit> = None;
+        let mut best: Option<PrimitiveHit> = None;
         let mut t_max = t_range.end;
 
         for prim in &self.primitives {
@@ -101,7 +101,7 @@ impl Accelerator for BruteForce {
         ray: &Ray,
         t_range: Range<f32>,
         lib: &Library<S>,
-    ) -> Vec<Hit> {
+    ) -> Vec<PrimitiveHit> {
         if self
             .bounds
             .intersect_range(ray.origin, ray.dir, t_range.clone())

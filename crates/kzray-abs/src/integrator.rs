@@ -132,6 +132,7 @@
 //! 下调用（如光子映射的光子沉积）。这是实现层的选择，契约层不约束
 //! ——`Integrator` 的实现可以持有 `&dyn Film`，也可以不持有。
 
+use crate::AreaLight;
 use crate::light::{InfiniteLight, Light, LightSampler};
 use crate::ray::Ray;
 use crate::sampler::Sampler;
@@ -162,13 +163,14 @@ use crate::spectrum::SpectralAlgebra;
 /// `li` 不持有 `scene` / `ray` / `sampler` 的引用，只读/借用它们。
 /// 积分器内部可以创建临时状态（路径栈、子路径、MIS 权重数组），
 /// 但生命周期不超出 `li` 的调用。
-pub trait Integrator<S, LS, SC, L, IL>: Send + Sync
+pub trait Integrator<S, LS, SC, L, IL, AL>: Send + Sync
 where
     S: SpectralAlgebra,
     LS: LightSampler,
-    SC: Scene<S, LS, L, IL>,
+    SC: Scene<S, LS, L, IL, AL>,
     L: Light<S>,
     IL: InfiniteLight<S>,
+    AL: AreaLight<S>,
 {
     /// 计算沿 `ray` 到达的辐射亮度。
     ///

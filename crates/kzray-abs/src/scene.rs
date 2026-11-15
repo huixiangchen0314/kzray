@@ -29,18 +29,20 @@ use std::ops::Range;
 use kzray_data::common::LightId;
 use kzray_data::geometry::Aabb;
 
+use crate::AreaLight;
 use crate::library::Library;
 use crate::light::{InfiniteLight, Light, LightSampler};
 use crate::material::Material;
-use crate::ray::{Ray, SurfaceHit};
+use crate::ray::{Hit, Ray, SurfaceHit};
 use crate::spectrum::SpectralAlgebra;
 
-pub trait Scene<S, LS, L, IL>: Send + Sync
+pub trait Scene<S, LS, DL, IL, AL>: Send + Sync
 where
     S: SpectralAlgebra,
     LS: LightSampler,
-    L: Light<S>,
+    DL: Light<S>,
     IL: InfiniteLight<S>,
+   AL: AreaLight<S>,
 {
     /// 场景整体 AABB。
     ///
@@ -49,7 +51,7 @@ where
     fn bounds(&self) -> Aabb;
 
     /// 最近命中。`t_range` 限定搜索区间。
-    fn intersect(&self, ray: &Ray, t_range: Range<f32>) -> Option<SurfaceHit>;
+    fn intersect(&self, ray: &Ray, t_range: Range<f32>) -> Option<Hit>;
 
     /// 遮挡查询：`t_range` 内任意可接受命中存在即 `true`。
     ///
@@ -64,13 +66,14 @@ where
     fn material(&self, hit: &SurfaceHit) -> Option<&Material<S>>;
 
     /// 查光源。
-    fn light(&self, id: LightId) -> Option<&L>;
+    fn delta_light(&self, id: LightId) -> Option<&DL>;
 
+    fn area_light(&self, id: LightId) -> Option<&AL>;
+
+    fn infinite_lights(&self) -> &[IL];
+    
     /// 光源采样器。无光源时为 `None`。
     fn light_sampler(&self) -> Option<&LS>;
-
-    /// 无限远光源（环境光）。无环境光时为 `None`。
-    fn infinite_light(&self) -> Option<&IL>;
 
     /// 统一资源容器。
     ///

@@ -2,12 +2,13 @@
 
 use glam::{Affine3A, Vec2, Vec3, Vec3A};
 
+use kzray_abs::AreaLight;
 use kzray_abs::light::{
     LiGeometry, LiSample, Light, LightSampleContext, LightType,
 };
 use kzray_abs::spectrum::{ScalarAlgebra, SpectralAlgebra};
 
-use crate::geometry::{AnyShapeA, ShapeA, SphereA, TriangleA};
+use crate::geometry::{AnyShapeA, RayA, ShapeA, SphereA, TriangleA};
 
 /// 解析形状面积光。自包含几何——采样时零查表、零 `Library` 依赖。
 ///
@@ -112,10 +113,29 @@ impl<S: SpectralAlgebra> Light<S> for ShapeAreaLight<S> {
         })
     }
 
-    fn pdf_li(&self, _ctx: &LightSampleContext<'_, S>, _wi: Vec3) -> f32 {
-        // 反算：光线与几何求交得交点后算 pdf。MIS 阶段实现。
-        // 当前 NEE 不调用——NEE 用 sample_li 返回的 pdf。
-        0.0
+    fn pdf_li(&self, ctx: &LightSampleContext<'_, S>, wi: Vec3) -> f32 {
+        // 从着色点沿 wi 发射射线与世界空间几何求交。
+        // 这是 pdf_li 唯一需要几何的地方——world_shape 自包含，零查表。
+        let ray = RayA::new(Vec3A::from(ctx.position), Vec3A::from(wi), 0.0);
+        let Some(hit) = self.world_shape.intersect(&ray, 1e-4..f32::INFINITY) else {
+            return 0.0; // 方向未命中光源
+        };
+
+        // wi 是单位向量，hit.t 即 distance。
+        let distance = hit.t;
+        let cos_light = hit.geometric_normal.dot(-wi); // 与 sample_li 一致
+        let cos_light = if self.two_sided { cos_light.abs() } else { cos_light };
+        if cos_light <= 1e-6 {
+            return 0.0; // 背面或掠射
+        }
+
+        // pdf_area 从几何面积算。三角形 / 球都支持 surface_area()。
+        let Some(area) = self.world_shape.surface_area() else {
+            return 0.0; // Plane 不支持（构造时已拒绝）
+        };
+        let pdf_area = 1.0 / area;
+
+        pdf_area * distance * distance / cos_light
     }
 
     fn phi(&self, _wavelengths: &S::WavelengthContext) -> S {
@@ -156,5 +176,44 @@ fn transform_to_world(shape: AnyShapeA, transform: &Affine3A) -> AnyShapeA {
         AnyShapeA::Plane(_) => {
             panic!("ShapeAreaLight cannot use Plane (infinite surface has no area)")
         }
+    }
+}
+
+
+// ═══════════════════════════════════════════════════════════════
+// AreaLight 实现
+// ═══════════════════════════════════════════════════════════════
+
+impl<S: SpectralAlgebra> AreaLight<S> for ShapeAreaLight<S> {
+    /// 给定面积光表面点、法线、UV、出射方向，返回发射辐射亮度。
+    ///
+    /// # 单面 / 双面
+    ///
+    /// - `two_sided == false`：仅法线正向发光。`wo`（从光源指向着色点）
+    ///   与 `normal` 反向时返回零——背面不发光。
+    /// - `two_sided == true`：两面都发光，`wo` 方向不影响返回值。
+    ///
+    /// 与 [`Light::sample_li`] 的 `cos_light` 判定一致——`sample_li` 在
+    /// 背面返回 `None`，`emitted_radiance` 在背面返回零。两条路径对
+    /// "背面不发光"的语义统一。
+    ///
+    /// # UV
+    ///
+    /// 当前常量 radiance，`uv` 未用。未来支持 emission texture 时，
+    /// 从 `uv` 采样 `TextureId<EmissiveChannel<S>>`。
+    #[inline]
+    fn emitted_radiance(
+        &self,
+        _point: Vec3,
+        normal: Vec3,
+        _uv: Vec2,
+        wo: Vec3,
+        _wavelengths: &S::WavelengthContext,
+    ) -> S {
+        if !self.two_sided && wo.dot(normal) <= 0.0 {
+            // 单面 + 从背面看：不发光。`ScalarAlgebra::zero()` 显式限定。
+            return <S as ScalarAlgebra>::zero();
+        }
+        self.radiance
     }
 }

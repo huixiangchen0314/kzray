@@ -1,4 +1,4 @@
-//! kzray-impl/src/accel/animated.rs
+//! kzray-impl/src/accel/animated_shape.rs
 //! 动画化实例
 
 use std::ops::Range;
@@ -9,9 +9,8 @@ use kzray_data::{Aabb, InstanceId, TextureId};
 
 use crate::{
     accel::{
-        Bounded,
-        instance::{
-            InstanceHit, InstancePrimitive, intersect_with_transform,
+        Bounded, InstanceHit, instance::InstancePrimitive, shape::{
+             intersect_with_transform,
             occluded_with_transform,
         },
     }, geometry::{AnyShapeA, RayA}, 
@@ -43,7 +42,6 @@ pub struct AnimatedShapeInstance {
     pub inverse: [Affine3A; 2],
     /// alpha cutout 纹理。`None` = 不透明。
     pub alpha: Option<TextureId>,
-
 }
 
 impl AnimatedShapeInstance {

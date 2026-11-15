@@ -7,22 +7,22 @@
 //!
 //! `rayon::map_init` 可以每线程 clone 一次，但需要 `Sync` 的 init 闭包。
 //! 每行 clone 更简单——`PCGSampler` 的 clone 是 `Pcg64Mcg`（`u128`）+ `u64`
-//! 的拷贝，开销可忽略（600 行 × ~50ns = 30μs，相比 18s 渲染时间可忽略）。
+//! 的拷贝，开销可忽略。
 //!
 //! # 种子独立性
 //!
 //! 每行 clone 的 `PCGSampler` 字段相同（同 `seed`），但 `start_pixel_sample`
 //! 内部用 `(seed, pixel, sample_index)` hash，不同像素产生不同随机数序列。
-//! 跨行不相关。跨像素不相关。
 //!
 //! # 维度
 //!
 //! 相机采样消耗维度 0-4（像素 2 + 透镜 2 + 时间 1），`li` 从维度 5 开始。
 //!
-//! # 并发
+//! # 泛型传播
 //!
-//! `Film::add_sample` 用 `&self`，内部 `Mutex` 保护。多线程竞争锁——第一版
-//! 先这样，profile 后如瓶颈改分块。
+//! `Scene` 携带 `DL` / `IL` / `AL` 三个光源泛型，`Integrator` 与之一致。
+//! `render` 的泛型列表同步扩展——三个光源参数独立传播，不合并为统一
+//! 抽象。
 
 use glam::{UVec2, Vec2};
 use rayon::prelude::*;
@@ -30,7 +30,7 @@ use rayon::prelude::*;
 use kzray_abs::camera::Camera;
 use kzray_abs::film::Film;
 use kzray_abs::integrator::Integrator;
-use kzray_abs::light::{InfiniteLight, Light, LightSampler};
+use kzray_abs::light::{AreaLight, InfiniteLight, Light, LightSampler};
 use kzray_abs::sampler::Sampler;
 use kzray_abs::scene::Scene;
 use kzray_abs::spectrum::SpectralAlgebra;
@@ -67,23 +67,17 @@ impl RenderConfig {
 ///
 /// # 泛型约束
 ///
-/// - `SM: Sampler + Clone + Sync`：`Sampler` 已要求 `Send`，这里加 `Clone`
-///   （每行 clone）和 `Sync`（共享引用 `&SM` 跨线程捕获）。
-/// - `C: Camera<S>` / `SC: Scene<...>` / `I: Integrator<...>` / `F: Film<...>`：
-///   都已 `Send + Sync`（契约层要求），无需额外约束。
-///
-/// # 种子
-///
-/// `base_sampler` 按值传入，`render` 拥有它。每行 `base_sampler.clone()`，
-/// 克隆后的实例字段相同（同 seed），但 `start_pixel_sample(pixel, ...)`
-/// 内部用 pixel hash，不同像素产生不同序列。
+/// - `SC: Scene<S, LS, DL, IL, AL>`：五泛型与场景接口对齐；
+/// - `I: Integrator<S, LS, SC, DL, IL, AL>`：六泛型与积分器接口对齐；
+/// - `SM: Sampler + Clone + Sync`：`Sampler` 已要求 `Send`，这里加
+///   `Clone`（每行 clone）和 `Sync`（共享引用跨线程捕获）。
 ///
 /// # 线程数
 ///
 /// 由 `rayon` 全局线程池决定（`RAYON_NUM_THREADS` 环境变量或 CPU 核心数）。
 /// 调用方可以通过 `rayon::ThreadPoolBuilder::new().num_threads(n).build()`
 /// 自定义线程池。
-pub fn render<S, LS, C, F, SC, L, IL, I, SM>(
+pub fn render<S, LS, C, F, SC, DL, IL, AL, I, SM>(
     camera: &C,
     scene: &SC,
     integrator: &I,
@@ -97,10 +91,11 @@ where
     LS: LightSampler,
     C: Camera<S>,
     F: Film<S, Output = Image>,
-    SC: Scene<S, LS, L, IL>,
-    L: Light<S>,
+    SC: Scene<S, LS, DL, IL, AL>,
+    DL: Light<S>,
     IL: InfiniteLight<S>,
-    I: Integrator<S, LS, SC, L, IL>,
+    AL: AreaLight<S>,
+    I: Integrator<S, LS, SC, DL, IL, AL>,
     SM: Sampler + Clone + Sync,
 {
     let res = film.resolution();
@@ -131,14 +126,15 @@ where
                 let time = camera.sample_time(sampler.next_f32(4));
 
                 // 生成主光线
-                let cam_sample =
-                    match camera.gen_ray(
-                        pixel_sample,
-                        Vec2::from(lens_sample),
-                        time, wavelengths) {
-                            Some(cs) => cs,
-                            None => continue,
-                        };
+                let cam_sample = match camera.gen_ray(
+                    pixel_sample,
+                    Vec2::from(lens_sample),
+                    time,
+                    wavelengths,
+                ) {
+                    Some(cs) => cs,
+                    None => continue,
+                };
 
                 // 相机采样消耗维度 0-4，li 从维度 5 开始
                 let radiance =
