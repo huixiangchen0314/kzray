@@ -4,19 +4,17 @@
 use std::ops::Range;
 
 use glam::Affine3A;
-use kzray_data::{Aabb, InstanceId};
+use kzray_abs::{Library, SpectralAlgebra};
+use kzray_data::{Aabb, InstanceId, TextureId};
 
 use crate::{
     accel::{
         Bounded,
-        alpha::AlphaSource,
         instance::{
             InstanceHit, InstancePrimitive, intersect_with_transform,
             occluded_with_transform,
         },
-        resource::ResourceTable,
-    },
-    geometry::{AnyShapeA, RayA},
+    }, geometry::{AnyShapeA, RayA}, 
 };
 
 /// 动画化解析形状实例。
@@ -43,16 +41,12 @@ pub struct AnimatedShapeInstance {
     pub forward: [Affine3A; 2],
     /// t=0 和 t=1 的逆变换（世界 → 局部）。
     pub inverse: [Affine3A; 2],
-    /// alpha cutout 源。`None` = 不透明（求交零成本）。
-    pub alpha: Option<AlphaSource>,
+    /// alpha cutout 纹理。`None` = 不透明。
+    pub alpha: Option<TextureId>,
+
 }
 
 impl AnimatedShapeInstance {
-    /// 从两个关键帧的正变换构造，自动求逆。默认不透明。
-    ///
-    /// # Panics
-    ///
-    /// 任一变换不可逆（`|det| ≤ 1e-12`）时 panic。
     pub fn new(
         id: InstanceId,
         shape: AnyShapeA,
@@ -75,29 +69,21 @@ impl AnimatedShapeInstance {
         }
     }
 
-    /// 设置 alpha cutout（构建期调用）。
-    ///
-    /// 链式风格：
-    /// `AnimatedShapeInstance::new(...).with_alpha(AlphaSource::Constant(0.5))`。
-    /// 不调用则保持不透明。
-    pub fn with_alpha(mut self, alpha: AlphaSource) -> Self {
+    pub fn with_alpha(mut self, alpha: TextureId) -> Self {
         self.alpha = Some(alpha);
         self
     }
 
-    /// `time ∈ [0, 1]` 时刻的正变换。
     #[inline]
     fn forward_at(&self, time: f32) -> Affine3A {
         lerp_affine(&self.forward[0], &self.forward[1], time)
     }
 
-    /// `time ∈ [0, 1]` 时刻的逆变换。
     #[inline]
     fn inverse_at(&self, time: f32) -> Affine3A {
         lerp_affine(&self.inverse[0], &self.inverse[1], time)
     }
 
-    /// `time ∈ [0, 1]` 时刻的正逆变换对。
     #[inline]
     fn transform_at(&self, time: f32) -> (Affine3A, Affine3A) {
         (self.forward_at(time), self.inverse_at(time))
@@ -106,41 +92,38 @@ impl AnimatedShapeInstance {
 
 impl InstancePrimitive for AnimatedShapeInstance {
     #[inline]
-    fn intersect(
+    fn intersect<S: SpectralAlgebra>(
         &self,
         ray: &RayA,
         t_range: Range<f32>,
-        table: &ResourceTable,
+        lib: &Library<S>,
     ) -> Option<InstanceHit> {
         let (forward, inverse) = self.transform_at(ray.time);
         let hit = intersect_with_transform(
             &self.shape,
             &forward,
             &inverse,
-            self.alpha.as_ref(),
+            self.alpha,          // Option<TextureId> 按值传
             ray,
             t_range,
-            table,
+            lib,
         )?;
         Some(InstanceHit::Shape(self.id, hit))
     }
 
     #[inline]
-    fn occluded(
+    fn occluded<S: SpectralAlgebra>(
         &self,
         ray: &RayA,
         t_range: Range<f32>,
-        table: &ResourceTable,
+        lib: &Library<S>,
     ) -> bool {
-        match &self.alpha {
-            // 快路径：无 alpha，短路 occluded，不构造 ShapeHit。
-            // 只解析逆变换（世界→局部），正变换对遮挡查询无用。
+        match self.alpha {
             None => {
                 let inverse = self.inverse_at(ray.time);
                 occluded_with_transform(&self.shape, &inverse, ray, t_range)
             }
-            // 慢路径：有 alpha，需要 UV 采样，走 intersect 拿候选再判。
-            Some(_) => self.intersect(ray, t_range, table).is_some(),
+            Some(_) => self.intersect(ray, t_range, lib).is_some(),
         }
     }
 }

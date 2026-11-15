@@ -64,7 +64,19 @@ pub trait ScalarAlgebra: Copy + Send + Sync + 'static {
     fn sub(&self, other: &Self) -> Self {
         self.add(&other.neg())
     }
+
+    /// 线性插值：`a + (b - a) * t`。
+    ///
+    /// **由代数定义导出**——`add` / `sub` / `scale` 组合，不引入新公理。
+    /// 默认实现，所有 `ScalarAlgebra` 实现自动获得。`t` 通过
+    /// `S::Scalar: From<f32>` 转换到标量域。
+    #[inline]
+    fn lerp(a: Self, b: Self, t: f32) -> Self {
+        a.add(&b.sub(&a).scale(t.into()))
+    }
+
 }
+
 
 // ═══════════════════════════════════════════════════════════════
 // SpectralAlgebra：波长上下文
@@ -149,7 +161,9 @@ impl ScalarAlgebra for f32 {
     /// 调用方用 `max_abs() < eps` 早退时 `NaN` 不会通过，行为安全。
     #[inline]
     fn max_abs(&self) -> f32 { self.abs() }
-}
+
+
+  }
 
 // ═══════════════════════════════════════════════════════════════
 // 实现：Rgb
@@ -271,3 +285,4 @@ impl<const N: usize> SpectralAlgebra for Spectrum<N> {
     /// 分量数和 `SampledWavelengths<N>` 的波长数在类型层面强绑定。
     type WavelengthContext = SampledWavelengths<N>;
 }
+

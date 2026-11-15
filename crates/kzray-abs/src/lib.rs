@@ -1,15 +1,4 @@
 //! kzray-abs：渲染积分抽象层。
-//!
-//! 定义 MIS 无偏积分的数学核心、四个执行角色（积分器、引导器、积累器、拦截器）、
-//! 路径状态、以及执行上下文 `Runtime` 的占位。
-//!
-//! **边界**：本 crate 只定义抽象契约，不含具体实现。PT / BDPT / 光子映射、
-//! 具体积累器、具体采样器、具体引导器由上层 crate 提供，在本 crate 的
-//! trait 上装配。
-//!
-//! **范畴**：抽象层的内容是 MIS 积分的数学概念（BSDF、pdf、采样、权重）
-//! 和四个执行角色的接口。路径来源、调度策略、工程配置全部在构建层和
-//! `Runtime` 里，不在抽象层。
 
 pub mod error;
 pub mod ray;
@@ -24,6 +13,8 @@ pub mod film;
 pub mod scene;
 pub mod integrator;
 pub mod quantity;
+pub mod texture;
+pub mod library;
 
 // ---- 能量代数 ----
 pub use spectrum::{
@@ -50,3 +41,44 @@ pub use integrator::Integrator;
 pub use quantity::{
     Area, Delta, Measure, MisPdf, PathSpace, RandomWalk, Pdf, SolidAngle,
 };
+
+// 具体通道类型（每个领域一个）
+pub use texture::{
+    // 标量领域
+    AlphaChannel,
+    RoughnessChannel,
+    MetallicChannel,
+    IorChannel,
+    HeightChannel,
+    // 向量领域
+    NormalChannel,
+    // 光谱领域
+    AlbedoChannel,
+    EmissiveChannel,
+    TransmissionChannel,
+    ConductorF0Channel,
+};
+
+// 纹理接口 + 微分
+pub use texture::{Differential, Texture};
+
+// 常用纹理别名（trait object，带 Send + Sync）
+pub use texture::{
+    // 标量领域
+    AlphaTexture,
+    RoughnessTexture,
+    MetallicTexture,
+    IorTexture,
+    HeightTexture,
+    // 向量领域
+    NormalTexture,
+    // 光谱领域
+    AlbedoTexture,
+    EmissiveTexture,
+    TransmissionTexture,
+    ConductorF0Texture,
+    // 泛型光谱兜底
+    SpectralTexture,
+};
+
+pub use library::Library;

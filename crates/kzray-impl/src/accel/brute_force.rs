@@ -3,13 +3,15 @@
 
 use std::ops::Range;
 
-use kzray_abs::Ray;
+use kzray_abs::{Ray, SpectralAlgebra, Library};
 use kzray_data::Aabb;
 
 use crate::{
     accel::{
-        Accelerator, Bounded, accelerator::{Hit, Primitive}, resource::ResourceTable,
-    }, geometry::RayA,
+        Accelerator, Bounded,
+        accelerator::{Hit, Primitive},
+    },
+    geometry::RayA,
 };
 
 /// 暴力加速器：遍历全部图元，找最近命中。
@@ -47,16 +49,22 @@ impl BruteForce {
 }
 
 impl Accelerator for BruteForce {
-    fn test(&self, ray: &Ray, t_range: Range<f32>, table: &ResourceTable) -> Option<Hit> {
+    fn test<S: SpectralAlgebra>(
+        &self,
+        ray: &Ray,
+        t_range: Range<f32>,
+        lib: &Library<S>,
+    ) -> Option<Hit> {
         // 整体 AABB 快速剔除：光线与场景无交，直接返回。
-        self.bounds.intersect_range(ray.origin, ray.dir, t_range.clone())?;
+        self.bounds
+            .intersect_range(ray.origin, ray.dir, t_range.clone())?;
 
         let ray_a = RayA::from(*ray);
         let mut best: Option<Hit> = None;
         let mut t_max = t_range.end;
 
         for prim in &self.primitives {
-            if let Some(hit) = prim.intersect(&ray_a, t_range.start..t_max, table) {
+            if let Some(hit) = prim.intersect(&ray_a, t_range.start..t_max, lib) {
                 let t = hit.t();
                 if t < t_max {
                     t_max = t;
@@ -67,8 +75,17 @@ impl Accelerator for BruteForce {
         best
     }
 
-    fn occluded(&self, ray: &Ray, t_range: Range<f32>, table: &ResourceTable) -> bool {
-        if self.bounds.intersect_range(ray.origin, ray.dir, t_range.clone()).is_none() {
+    fn occluded<S: SpectralAlgebra>(
+        &self,
+        ray: &Ray,
+        t_range: Range<f32>,
+        lib: &Library<S>,
+    ) -> bool {
+        if self
+            .bounds
+            .intersect_range(ray.origin, ray.dir, t_range.clone())
+            .is_none()
+        {
             return false;
         }
 
@@ -76,11 +93,20 @@ impl Accelerator for BruteForce {
         // 任意图元遮挡即返回，不找最近——这是与 test 的核心区别。
         self.primitives
             .iter()
-            .any(|prim| prim.occluded(&ray_a, t_range.clone(), table))
+            .any(|prim| prim.occluded(&ray_a, t_range.clone(), lib))
     }
 
-    fn test_all(&self, ray: &Ray, t_range: Range<f32>, table: &ResourceTable) -> Vec<Hit> {
-        if self.bounds.intersect_range(ray.origin, ray.dir, t_range.clone()).is_none() {
+    fn test_all<S: SpectralAlgebra>(
+        &self,
+        ray: &Ray,
+        t_range: Range<f32>,
+        lib: &Library<S>,
+    ) -> Vec<Hit> {
+        if self
+            .bounds
+            .intersect_range(ray.origin, ray.dir, t_range.clone())
+            .is_none()
+        {
             return Vec::new();
         }
 
@@ -88,7 +114,7 @@ impl Accelerator for BruteForce {
         // 收集所有命中，不维护 t_max——这是"所有"而非"最近"。
         self.primitives
             .iter()
-            .filter_map(|prim| prim.intersect(&ray_a, t_range.clone(), table))
+            .filter_map(|prim| prim.intersect(&ray_a, t_range.clone(), lib))
             .collect()
     }
 }

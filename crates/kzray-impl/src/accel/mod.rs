@@ -2,11 +2,9 @@
 //! 加速层：加速结构 + 图元 + 实例 + 资源表。
 
 pub mod accelerator;
-pub mod alpha;
 pub mod animated;
 pub mod brute_force;
 pub mod instance;
-pub mod resource;
 
 // 延后接入，实现后取消注释：
 // pub mod binned_bvh;
@@ -27,7 +25,3 @@ pub use brute_force::BruteForce;
 
 // 命中结果与 alpha（上层 shading 阶段消费）
 pub use instance::InstanceHit;
-pub use alpha::AlphaSource;
-
-// 资源表（上层构建场景时构造，求交时透传）
-pub use resource::ResourceTable;

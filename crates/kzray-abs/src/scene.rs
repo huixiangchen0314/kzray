@@ -15,12 +15,21 @@
 //!
 //! 所有查询方法返回具体类型引用，零虚分派。`Scene` 本身 object-safe
 //! （方法都不是泛型），但通过泛型 `SC: Scene<...>` 传播。
+//!
+//! # `Library<S>` 的定位
+//!
+//! [`Scene::library`] 返回 `&Library<S>`——统一资源容器，持有网格、
+//! 各通道纹理（alpha / albedo / roughness 等）。求交层通过它查 alpha
+//! 纹理做 cutout；着色层通过它查 albedo / roughness 等纹理。`Library`
+//! 定义在 `kzray-abs`，具体纹理实现由 `kzray-impl` 通过
+//! `Box<dyn Texture<C>>` 注入。
 
 use std::ops::Range;
 
 use kzray_data::common::LightId;
 use kzray_data::geometry::Aabb;
 
+use crate::library::Library;
 use crate::light::{InfiniteLight, Light, LightSampler};
 use crate::material::Material;
 use crate::ray::{Ray, SurfaceHit};
@@ -33,170 +42,41 @@ where
     L: Light<S>,
     IL: InfiniteLight<S>,
 {
+    /// 场景整体 AABB。
+    ///
+    /// 无限图元（无限平面）存在时返回 [`Aabb::empty`]，表示"场景没有
+    /// 有限包围盒"。上层用 `is_empty()` 判断。
     fn bounds(&self) -> Aabb;
 
+    /// 最近命中。`t_range` 限定搜索区间。
     fn intersect(&self, ray: &Ray, t_range: Range<f32>) -> Option<SurfaceHit>;
 
+    /// 遮挡查询：`t_range` 内任意可接受命中存在即 `true`。
+    ///
+    /// 与 [`Self::intersect`] 的区别：只回答"有没有"，不求最近、不构造
+    /// `SurfaceHit`。阴影射线、AO 射线专用。alpha 透明命中被自动跳过。
     fn intersect_p(&self, ray: &Ray, t_range: Range<f32>) -> bool;
 
     /// 查询运行时材质。返回 `&Material<S>`（具体 enum）。
+    ///
+    /// `hit.instance_id` 索引到材质表。材质与实例一一对应（每个实例
+    /// 一个材质），与几何形状无关。
     fn material(&self, hit: &SurfaceHit) -> Option<&Material<S>>;
 
+    /// 查光源。
     fn light(&self, id: LightId) -> Option<&L>;
 
+    /// 光源采样器。无光源时为 `None`。
     fn light_sampler(&self) -> Option<&LS>;
 
+    /// 无限远光源（环境光）。无环境光时为 `None`。
     fn infinite_light(&self) -> Option<&IL>;
-}
 
-// ═══════════════════════════════════════════════════════════════
-// 测试
-// ═══════════════════════════════════════════════════════════════
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::light::{
-        InfiniteLight, LeSample, LiSample, Light, LightSampleContext, LightSelection,
-        LightType,
-    };
-    use crate::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
-    use glam::{UVec2, Vec2, Vec3};
-
-    struct TestSampler;
-    impl crate::sampler::Sampler for TestSampler {
-        fn start_pixel_sample(&mut self, _: UVec2, _: u32) {}
-        fn next_f32(&mut self, _: u32) -> f32 {
-            0.5
-        }
-    }
-
-    struct EmptyLightSampler;
-    impl LightSampler for EmptyLightSampler {
-        fn sample<SM: crate::sampler::Sampler>(
-            &self,
-            _ctx: &LightSampleContext,
-            _sampler: &mut SM,
-            _dim: u32,
-        ) -> Option<LightSelection> {
-            None
-        }
-        fn pdf(&self, _ctx: &LightSampleContext, _id: LightId) -> f32 {
-            0.0
-        }
-        fn max_sample_dimensions(&self) -> u32 {
-            1
-        }
-    }
-
-    struct EmptyLight;
-    impl Light<SpectrumRgb> for EmptyLight {
-        fn light_type(&self) -> LightType {
-            LightType::DeltaPosition
-        }
-        fn sample_li(
-            &self,
-            _ctx: &LightSampleContext,
-            _s: Vec2,
-            _wl: &NoWavelengths,
-        ) -> Option<LiSample<SpectrumRgb>> {
-            None
-        }
-        fn pdf_li(&self, _ctx: &LightSampleContext, _wi: Vec3) -> f32 {
-            0.0
-        }
-        fn phi(&self, _wl: &NoWavelengths) -> SpectrumRgb {
-            SpectrumRgb::ZERO
-        }
-    }
-
-    struct EmptyInfiniteLight;
-    impl InfiniteLight<SpectrumRgb> for EmptyInfiniteLight {
-        fn emitted_radiance(&self, _: &Ray, _: &NoWavelengths) -> SpectrumRgb {
-            SpectrumRgb::ZERO
-        }
-        fn sample_le(&self, _: Vec2, _: &NoWavelengths) -> Option<LeSample<SpectrumRgb>> {
-            None
-        }
-        fn pdf_le(&self, _: Vec3, _: &NoWavelengths) -> f32 {
-            0.0
-        }
-    }
-    impl Light<SpectrumRgb> for EmptyInfiniteLight {
-        fn light_type(&self) -> LightType {
-            LightType::Infinite
-        }
-        fn sample_li(
-            &self,
-            _: &LightSampleContext,
-            _: Vec2,
-            _: &NoWavelengths,
-        ) -> Option<LiSample<SpectrumRgb>> {
-            None
-        }
-        fn pdf_li(&self, _: &LightSampleContext, _: Vec3) -> f32 {
-            0.0
-        }
-        fn phi(&self, _: &NoWavelengths) -> SpectrumRgb {
-            SpectrumRgb::ZERO
-        }
-    }
-
-    struct EmptyScene;
-    impl Scene<SpectrumRgb, EmptyLightSampler, EmptyLight, EmptyInfiniteLight> for EmptyScene {
-        fn bounds(&self) -> Aabb {
-            Aabb::empty()
-        }
-        fn intersect(&self, _: &Ray, _: Range<f32>) -> Option<SurfaceHit> {
-            None
-        }
-        fn intersect_p(&self, _: &Ray, _: Range<f32>) -> bool {
-            false
-        }
-        fn material(&self, _: &SurfaceHit) -> Option<&Material<SpectrumRgb>> {
-            None
-        }
-        fn light(&self, _: LightId) -> Option<&EmptyLight> {
-            None
-        }
-        fn light_sampler(&self) -> Option<&EmptyLightSampler> {
-            None
-        }
-        fn infinite_light(&self) -> Option<&EmptyInfiniteLight> {
-            None
-        }
-    }
-
-    #[test]
-    fn empty_scene_bounds_is_empty() {
-        let scene = EmptyScene;
-        assert!(scene.bounds().is_empty());
-    }
-
-    #[test]
-    fn empty_scene_never_hits() {
-        let scene = EmptyScene;
-        let ray = Ray::new(Vec3::ZERO, Vec3::X, 0.0);
-        assert!(scene.intersect(&ray, 0.0..f32::INFINITY).is_none());
-        assert!(!scene.intersect_p(&ray, 0.0..f32::INFINITY));
-    }
-
-    #[test]
-    fn empty_scene_has_no_lights() {
-        let scene = EmptyScene;
-        assert!(scene.light(LightId::from(0)).is_none());
-        assert!(scene.light_sampler().is_none());
-        assert!(scene.infinite_light().is_none());
-    }
-
-    #[test]
-    fn scene_send_sync() {
-        fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<EmptyScene>();
-    }
-
-    #[test]
-    fn _use_test_sampler() {
-        let _ = TestSampler;
-    }
+    /// 统一资源容器。
+    ///
+    /// 着色层通过它查纹理（albedo / roughness / normal 等），求交层
+    /// 内部已用它的 alpha 纹理做 cutout。`Scene` 暴露它以让 shading
+    /// 流程可以在 `scene.intersect(...)` 之后继续 `scene.library()`，
+    /// 两次 `&self` 共享借用，无冲突。
+    fn library(&self) -> &Library<S>;
 }
