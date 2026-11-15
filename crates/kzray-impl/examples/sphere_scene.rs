@@ -27,7 +27,8 @@ use kzray_abs::sensor::RgbSensor;
 use kzray_abs::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
 use kzray_data::TextureId;
 use kzray_data::common::LightId;
-use kzray_impl::ConstantTexture;
+use kzray_impl::texture::image::Wrap;
+use kzray_impl::{ConstantTexture, ImageTexture};
 use kzray_math::filter::BoxFilter;
 
 use kzray_impl::camera::pinhole::{PinholeCamera, PinholeCameraConfig};
@@ -42,6 +43,23 @@ use kzray_impl::sampler::PCGSampler;
 use kzray_impl::scene::{SimpleScene, SimpleSceneBuilder};
 use kzray_impl::util::{look_at, write_image};
 
+/// 构造 N×N 棋盘图像，每 `cell` 像素一格，交替 `a` / `b`。
+fn checker_image(
+    size: u32,
+    cell: u32,
+    a: SpectrumRgb,
+    b: SpectrumRgb,
+) -> ImageTexture<AlbedoChannel<SpectrumRgb>> {
+    let mut data = Vec::with_capacity((size * size) as usize);
+    for y in 0..size {
+        for x in 0..size {
+            let cx = x / cell;
+            let cy = y / cell;
+            data.push(if (cx + cy) & 1 == 0 { a } else { b });
+        }
+    }
+    ImageTexture::from_values_with_wrap(size, size, data, Wrap::Repeat)
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
 
@@ -69,28 +87,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ─── 场景 ───
     let mut builder = SimpleSceneBuilder::<SpectrumRgb, LS, Lt, IL>::new();
-    let red_albedo_id = TextureId::from(0);
-    let gray_albedo_id = TextureId::from(1);
+    let checker_tex0 = TextureId::from(0);
+    let checker_tex1 = TextureId::from(1);
     // 先注册 albedo 纹理，再构造材质
     builder.library_mut().add_albedo(
-        red_albedo_id,
-        Box::new(ConstantTexture::<AlbedoChannel<SpectrumRgb>>::new(
+        checker_tex0,
+        Box::new(checker_image(
+            64, 8,
             SpectrumRgb::new(0.8, 0.2, 0.2),
+            SpectrumRgb::new(0.9, 0.9, 0.9),
         )),
     );
-    let red_material = Material::bsdf(Arc::new(
-        LambertBSDFBuilder::new(red_albedo_id)));
-    builder.add_sphere(Sphere::new(Vec3::ZERO, 1.0), red_material);
-
     builder.library_mut().add_albedo(
-        gray_albedo_id,
-        Box::new(ConstantTexture::<AlbedoChannel<SpectrumRgb>>::new(
-            SpectrumRgb::new(0.5, 0.5, 0.5),
-        )),
+        checker_tex1,
+                Box::new(checker_image(
+            64, 8,
+            SpectrumRgb::new(0.2, 0.4, 0.8),
+            SpectrumRgb::new(0.9, 0.9, 0.9),
+        ).with_wrap(Wrap::Clamp)),
     );
-    let gray_material = Material::bsdf(Arc::new(
-        LambertBSDFBuilder::new(gray_albedo_id)));
-    builder.add_plane(Plane::horizontal(-1.0), gray_material);
+
+    let checker_mat0 = Material::bsdf(Arc::new(
+        LambertBSDFBuilder::new(checker_tex0)));
+    let checker_mat1 = Material::bsdf(Arc::new(
+        LambertBSDFBuilder::new(checker_tex1)));
+    
+    builder.add_plane(Plane::horizontal(-1.0), checker_mat0);
+    builder.add_sphere(Sphere::new(Vec3::ZERO, 1.0), checker_mat1);
     
     builder.add_light(AnyLight::Point(PointLight::new(
         Vec3::new(5.0, 5.0, 5.0),

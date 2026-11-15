@@ -6,7 +6,38 @@ use glam::Vec2;
 
 use kzray_abs::texture::{Channel, Differential, Texture};
 
-/// 图像纹理。像素存储为通道值 `C::Value`，双线性采样。
+/// UV 越界处理。
+///
+/// 纹理坐标的定义域由形状决定——`Plane` 的 UV 是世界坐标（`(x, z)`），
+/// 范围远超 `[0,1]`；`Sphere` 的 UV 是球面坐标，在 `[0,1]` 内。wrap
+/// 模式让同一纹理适配两种形状。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wrap {
+    /// 越界 clamp 到边界。球面 UV、单张图像贴片用。
+    Clamp,
+    /// 越界重复。地板、墙面等无限平面用。
+    Repeat,
+    /// 越界镜像重复。避免 repeat 接缝处的不连续。
+    Mirror,
+}
+
+impl Wrap {
+    /// 把任意 `u` 映射到 `[0, 1]`。
+    #[inline]
+    fn apply(self, u: f32) -> f32 {
+        match self {
+            Wrap::Clamp => u.clamp(0.0, 1.0),
+            Wrap::Repeat => u - u.floor(),
+            Wrap::Mirror => {
+                let f = u.floor();
+                let frac = u - f;
+                if (f as i64) & 1 == 0 { frac } else { 1.0 - frac }
+            }
+        }
+    }
+}
+
+///图像纹理。像素存储为通道值 `C::Value`，双线性采样。
 ///
 /// # 存储
 ///
@@ -30,35 +61,46 @@ pub struct ImageTexture<C: Channel> {
     width: u32,
     height: u32,
     data: Vec<C::Value>,
+    wrap: Wrap,
 }
 
 impl<C: Channel> ImageTexture<C> {
-    /// 从已解码的像素数据构造。
-    ///
-    /// # Panics
-    ///
-    /// - `width == 0` 或 `height == 0` 时 panic；
-    /// - `data.len() != width * height` 时 panic。
+    /// 从已解码的像素数据构造，默认 `Wrap::Clamp`。
     pub fn from_values(width: u32, height: u32, data: Vec<C::Value>) -> Self {
-        assert!(
-            width > 0 && height > 0,
-            "image dimensions must be non-zero (got {width}x{height})"
-        );
+        Self::from_values_with_wrap(width, height, data, Wrap::Clamp)
+    }
+    
+    /// 从已解码的像素数据构造，指定 wrap 模式。
+    pub fn from_values_with_wrap(
+        width: u32,
+        height: u32,
+        data: Vec<C::Value>,
+        wrap: Wrap,
+    ) -> Self {
+        assert!(width > 0 && height > 0, "image dimensions must be non-zero");
         assert_eq!(
             data.len() as u64,
             width as u64 * height as u64,
-            "image data length ({}) must equal width * height ({width} * {height})",
-            data.len()
+            "image data length must equal width * height"
         );
-        Self { width, height, data }
+        Self { width, height, data, wrap }
     }
-
+    
+    pub fn wrap(&self) -> Wrap {
+        self.wrap
+    }
+    
     pub fn width(&self) -> u32 {
         self.width
     }
 
     pub fn height(&self) -> u32 {
         self.height
+    }
+
+    pub fn with_wrap(mut self, wrap: Wrap) -> Self {
+        self.wrap = wrap;
+        self
     }
 
     /// 双线性采样。UV 超出 `[0, 1]` 时 clamp。
@@ -69,8 +111,8 @@ impl<C: Channel> ImageTexture<C> {
     #[inline]
     fn sample_bilinear(&self, uv: Vec2) -> C::Value {
         // 构造时已保证 width/height > 0，`width - 1` 安全。
-        let u = uv.x.clamp(0.0, 1.0) * (self.width - 1) as f32;
-        let v = uv.y.clamp(0.0, 1.0) * (self.height - 1) as f32;
+        let u = self.wrap.apply(uv.x) * (self.width - 1) as f32;
+        let v = self.wrap.apply(uv.y) * (self.height - 1) as f32;
 
         let x0 = u.floor() as u32;
         let y0 = v.floor() as u32;
