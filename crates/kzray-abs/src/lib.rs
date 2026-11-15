@@ -84,3 +84,5 @@ pub use texture::{
 pub use library::Library;
 
 pub use light::{Light, AreaLight, AreaLightBackface};
+
+pub use bsdf::{BxDF, BSDF, BxDFFlags, BxDFEntry, BxDFSample, TransportMode};
