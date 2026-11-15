@@ -39,7 +39,11 @@ use kzray_impl::sampler::PCGSampler;
 use kzray_impl::scene::{SimpleScene, SimpleSceneBuilder};
 use kzray_impl::util::{look_at, write_image};
 
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+
+    rayon::ThreadPoolBuilder::new().num_threads(12).build_global().unwrap();
+
     // 类型别名简化
     type Lt = AnyLight<SpectrumRgb>;
     type IL = AnyInfiniteLight<SpectrumRgb>;
@@ -95,11 +99,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ─── 渲染 ───
     let config = RenderConfig::new(64, 42);
     let wavelengths = NoWavelengths;
-    let mut sampler = PCGSampler::new(config.seed);
+    let base_sampler = PCGSampler::new(config.seed);
 
     println!(
-        "Rendering {}x{} @ {} spp...",
-        WIDTH, HEIGHT, config.samples_per_pixel
+        "Rendering {}x{} @ {} spp on {} threads...",
+        WIDTH,
+        HEIGHT,
+        config.samples_per_pixel,
+        rayon::current_num_threads()
     );
     let start = Instant::now();
 
@@ -108,7 +115,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &scene,
         &integrator,
         &film,
-        &mut sampler,
+        base_sampler, // 按值传入，从 &mut sampler 改为 base_sampler
         config,
         &wavelengths,
     );

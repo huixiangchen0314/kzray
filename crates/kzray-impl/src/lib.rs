@@ -8,5 +8,5 @@ pub mod scene;
 pub mod integrator;
 pub mod render;
 pub mod util;
-
+pub mod accel;
 

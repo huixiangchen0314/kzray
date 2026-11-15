@@ -32,7 +32,9 @@ impl EntityId {
 macro_rules! typed_ref {
     ($name:ident, $doc:literal) => {
         #[doc = $doc]
-        #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+        #[derive(
+            Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug,
+        )]
         #[serde(transparent)]
         pub struct $name(pub EntityId);
 
@@ -44,37 +46,47 @@ macro_rules! typed_ref {
             }
         }
 
-        
         impl From<EntityId> for $name {
-            fn from(id: EntityId) -> Self { $name(id) }
+            fn from(id: EntityId) -> Self {
+                $name(id)
+            }
         }
 
         impl From<$name> for EntityId {
-            fn from(t: $name) -> Self { t.0 }
+            fn from(t: $name) -> Self {
+                t.0
+            }
         }
 
         impl From<u64> for $name {
-            fn from(v: u64) -> Self { $name(EntityId(v)) }
+            fn from(v: u64) -> Self {
+                $name(EntityId(v))
+            }
         }
 
         impl From<$name> for u64 {
-            fn from(t: $name) -> Self { (t.0).0 }
+            fn from(t: $name) -> Self {
+                (t.0).0
+            }
         }
     };
 }
 
-// 数据表 key 类型：既是类型，也是对应表的 key
-
 typed_ref!(InstanceId, "渲染实例的唯一标识");
+typed_ref!(SphereId, "球数据Id");
+typed_ref!(PlaneId, "平面数据Id");
 typed_ref!(MeshId, "指向 `RenderInput.meshes` 的 key。");
 typed_ref!(MaterialId, "指向 `RenderInput.materials` 的 key。");
-typed_ref!(LightId,    "指向 `RenderInput.lights` 的 key。");
-typed_ref!(FieldId,     "指向 `RenderInput.fields` 的 key。");
-typed_ref!(NodeId,      "指向 `RenderInput.nodes` 的 key。");
+typed_ref!(LightId, "指向 `RenderInput.lights` 的 key。");
+typed_ref!(FieldId, "指向 `RenderInput.fields` 的 key。");
+typed_ref!(NodeId, "指向 `RenderInput.nodes` 的 key。");
 typed_ref!(VolumeId, "指向 `RenderInput.volumes` 的 key。");
 
 // 非表引用：外部资源 id，不指向 `RenderInput` 中的任何表
-typed_ref!(TextureId, "外部 bitmap 纹理资源 id（磁盘文件 / 外部 asset）。");
+typed_ref!(
+    TextureId,
+    "外部 bitmap 纹理资源 id（磁盘文件 / 外部 asset）。"
+);
 
 /// 名字 → id 的注册表。加载器用，碰撞显式报错。
 pub struct IdMap<V> {
@@ -83,7 +95,9 @@ pub struct IdMap<V> {
 
 impl<V> IdMap<V> {
     pub fn new() -> Self {
-        IdMap { entries: BTreeMap::new() }
+        IdMap {
+            entries: BTreeMap::new(),
+        }
     }
 
     pub fn insert_named(&mut self, name: &str, value: V) -> Result<EntityId, DataError> {

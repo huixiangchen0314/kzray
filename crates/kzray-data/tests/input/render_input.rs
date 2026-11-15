@@ -14,7 +14,7 @@ use kzray_data::config::{
     RenderChannelDesc, RenderConfig, SamplerConfig,
 };
 use kzray_data::geometry::{AttributeBuffer, Mesh};
-use kzray_data::input::{RenderInput, RenderInstance, VisibilityFlags};
+use kzray_data::input::{RenderInput, MeshInstance, VisibilityFlags};
 use kzray_data::light::{LightData, LightType, PointLight};
 use kzray_data::shading::Material;
 use kzray_data::volume::{VolumeBounds, VolumeData, VolumeInstance};
@@ -122,7 +122,7 @@ fn input_with_quad_mesh_roundtrip() {
 #[test]
 fn missing_geometry_reference_fails() {
     let mut input = empty_input();
-    input.instances.push(RenderInstance {
+    input.instances.push(MeshInstance {
         geometry: MeshId(EntityId::from_name("missing")),
         material_refs: vec![],
         world_transform: Transform::IDENTITY,
@@ -138,7 +138,7 @@ fn missing_material_reference_fails() {
     let mut input = empty_input();
     let geom_ref = MeshId(EntityId::from_name("quad"));
     input.meshes.insert(geom_ref, Mesh::default());
-    input.instances.push(RenderInstance {
+    input.instances.push(MeshInstance {
         geometry: geom_ref,
         material_refs: vec![MaterialId(EntityId::from_name("nope"))],
         world_transform: Transform::IDENTITY,
@@ -167,7 +167,7 @@ fn missing_displacement_field_fails() {
     let mut input = empty_input();
     let geom_ref = MeshId(EntityId::from_name("g"));
     input.meshes.insert(geom_ref, Mesh::default());
-    input.instances.push(RenderInstance {
+    input.instances.push(MeshInstance {
         geometry: geom_ref,
         material_refs: vec![],
         world_transform: Transform::IDENTITY,
@@ -353,7 +353,7 @@ fn valid_scene_with_material_and_light() {
         .materials
         .insert(mat_ref, Material { bsdf: bsdf_field });
 
-    input.instances.push(RenderInstance {
+    input.instances.push(MeshInstance {
         geometry: geom_ref,
         material_refs: vec![mat_ref],
         world_transform: Transform::IDENTITY,

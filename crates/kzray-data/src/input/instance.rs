@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 use crate::common::meta::HasMeta;
 use crate::common::{FieldId, MeshId, MaterialId, Meta, Transform};
 
+/// 根据可见性可能构建不同的材质
 #[derive(Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Debug)]
 pub struct VisibilityFlags {
     pub camera: bool,
@@ -27,7 +28,7 @@ impl Default for VisibilityFlags {
 }
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
-pub struct RenderInstance {
+pub struct MeshInstance {
     pub geometry: MeshId,
     pub material_refs: Vec<MaterialId>,
     pub world_transform: Transform,
@@ -37,7 +38,8 @@ pub struct RenderInstance {
     pub meta: Meta,
 }
 
-impl HasMeta for RenderInstance {
+impl HasMeta for MeshInstance {
     fn meta(&self) -> &Meta { &self.meta }
     fn meta_mut(&mut self) -> &mut Meta { &mut self.meta }
 }
+

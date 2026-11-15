@@ -7,6 +7,6 @@ pub mod instance;
 pub mod manifest;
 pub mod render_input;
 
-pub use instance::{RenderInstance, VisibilityFlags};
+pub use instance::{MeshInstance, VisibilityFlags, };
 pub use manifest::{PartitionMeta, RenderManifest};
 pub use render_input::RenderInput;

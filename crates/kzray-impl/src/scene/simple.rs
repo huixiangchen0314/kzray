@@ -1,33 +1,12 @@
-//! 简单场景。
+//! kzray-impl/src/scene/simple.rs  简单场景。
 //!
-//! 暴力遍历求交（O(n)），无 BVH。适用于：
-//!
-//! - 阶段 2-4 的 PT 管线验证；
-//! - 调试 / 单元测试；
-//! - 图元数量很少的场景（< 100）。
-//!
-//! # 场景模型
-//!
-//! 当前简化模型：每个图元是一个独立的 instance（`prim_id = 0`），
-//! `instance_id` 是图元在场景中的索引。材质按 instance 索引查。
-//!
-//! 阶段 5 接入 `RenderInput` 时，扩展为：
-//!
-//! - 多个 mesh 复用同一几何数据（不同 `instance_id`）；
-//! - 一个 mesh 的多个图元按材质槽分组（`prim_id` 区分）；
-//! - instance 变换。
-//!
-//! # 形状枚举
-//!
-//! [`Shape`] 是 `enum`，不是 trait——图元种类由实现层决定，封闭集合
-//! （当前 Sphere / Plane）。未来加图元时扩展枚举，与 `Material` 用 enum
-//! 是同一哲学。
+//! 几何求交委托给 [`BruteForce`]；材质按 `InstanceId` 索引查表。
+//! `BruteForce` 不携带谱参数——它只处理几何、alpha、实例 id，
+//! 不感知 `Material<S>`，因此 `SimpleScene<S, ...>` 的泛型只影响
+//! 材质与光源，不影响加速层。
 
-//! 简单场景。
-
+use std::collections::BTreeMap;
 use std::ops::Range;
-
-use glam::Vec3;
 
 use kzray_abs::light::{InfiniteLight, Light, LightSampler};
 use kzray_abs::material::Material;
@@ -37,59 +16,9 @@ use kzray_abs::spectrum::SpectralAlgebra;
 use kzray_data::common::{InstanceId, LightId};
 use kzray_data::geometry::Aabb;
 
-use crate::geometry::{GeometryHit, Plane, Sphere};
-
-// ═══════════════════════════════════════════════════════════════
-// Shape
-// ═══════════════════════════════════════════════════════════════
-
-#[derive(Clone, Copy, Debug)]
-enum Shape {
-    Sphere(Sphere),
-    Plane(Plane),
-}
-
-
-impl Shape {
-    fn intersect(&self, ray: &Ray, t_range: Range<f32>) -> Option<GeometryHit> {
-        match self {
-            Shape::Sphere(s) => s.intersect(ray, t_range),
-            Shape::Plane(p) => p.intersect(ray, t_range),
-        }
-    }
-
-    fn bounds(&self) -> Option<Aabb> {
-        match self {
-            Shape::Sphere(s) => Some(Aabb::new(
-                s.center - Vec3::splat(s.radius),
-                s.center + Vec3::splat(s.radius),
-            )),
-            Shape::Plane(_) => None,
-        }
-    }
-}
-
-impl From<Sphere> for Shape {
-    fn from(s: Sphere) -> Self {
-        Shape::Sphere(s)
-    }
-}
-
-impl From<Plane> for Shape {
-    fn from(p: Plane) -> Self {
-        Shape::Plane(p)
-    }
-}
-
-// ═══════════════════════════════════════════════════════════════
-// ShapeEntry
-// ═══════════════════════════════════════════════════════════════
-
-struct ShapeEntry<S: SpectralAlgebra> {
-    shape: Shape,
-    material: Material<S>,
-    instance_id: InstanceId,
-}
+use crate::accel::instance::ShapeInstance;
+use crate::accel::{Accelerator, Bounded, BruteForce, Hit, InstanceHit, Primitive, ResourceTable};
+use crate::geometry::{AnyShapeA, Plane, Sphere};
 
 // ═══════════════════════════════════════════════════════════════
 // SimpleScene
@@ -103,7 +32,12 @@ where
     IL: InfiniteLight<S>,
 {
     bounds: Aabb,
-    shapes: Vec<ShapeEntry<S>>,
+    /// 几何求交的加速结构。不泛型——不感知材质/谱。
+    accelerator: BruteForce,
+    /// 求交层资源表（当前为空：无 alpha 纹理、无 mesh）。
+    table: ResourceTable,
+    /// 材质表，按 `InstanceId` 索引。与 `accelerator` 内的实例顺序一致。
+    materials: Vec<Material<S>>,
     lights: Vec<L>,
     light_sampler: Option<LS>,
     infinite_light: Option<IL>,
@@ -121,27 +55,19 @@ where
     }
 
     fn intersect(&self, ray: &Ray, t_range: Range<f32>) -> Option<SurfaceHit> {
-        let mut best_t = t_range.end;
-        let mut best_hit = None;
-        for entry in &self.shapes {
-            let range = t_range.start..best_t;
-            if let Some(g) = entry.shape.intersect(ray, range) {
-                best_t = g.t;
-                best_hit = Some(g.into_surface_hit(entry.instance_id, 0));
-            }
-        }
-        best_hit
+        let hit = self.accelerator.test(ray, t_range, &self.table)?;
+        let Hit::Instance(InstanceHit::Shape(instance_id, shape_hit)) = hit;
+        // prim_id 对解析形状恒为 0；mesh 落地后从 InstanceHit 取真实索引。
+        Some(shape_hit.into_surface_hit_prim(instance_id))
     }
 
     fn intersect_p(&self, ray: &Ray, t_range: Range<f32>) -> bool {
-        self.shapes
-            .iter()
-            .any(|e| e.shape.intersect(ray, t_range.clone()).is_some())
+        self.accelerator.occluded(ray, t_range, &self.table)
     }
 
     fn material(&self, hit: &SurfaceHit) -> Option<&Material<S>> {
         let idx = hit.instance_id.as_u64() as usize;
-        self.shapes.get(idx).map(|e| &e.material)
+        self.materials.get(idx)
     }
 
     fn light(&self, id: LightId) -> Option<&L> {
@@ -168,7 +94,8 @@ where
     L: Light<S>,
     IL: InfiniteLight<S>,
 {
-    shapes: Vec<ShapeEntry<S>>,
+    primitives: Vec<Primitive>,
+    materials: Vec<Material<S>>,
     lights: Vec<L>,
     light_sampler: Option<LS>,
     infinite_light: Option<IL>,
@@ -184,7 +111,8 @@ where
 {
     pub fn new() -> Self {
         SimpleSceneBuilder {
-            shapes: Vec::new(),
+            primitives: Vec::new(),
+            materials: Vec::new(),
             lights: Vec::new(),
             light_sampler: None,
             infinite_light: None,
@@ -192,22 +120,21 @@ where
         }
     }
 
-    pub fn add_shape(&mut self, shape: impl Into<Shape>, material: Material<S>) -> InstanceId {
-        let instance_id = InstanceId::from(self.shapes.len() as u64);
-        self.shapes.push(ShapeEntry {
-            shape: shape.into(),
-            material,
-            instance_id,
-        });
-        instance_id
+    /// 添加解析形状实例（静态变换）。`InstanceId` 与材质表索引一致。
+    pub fn add_shape(&mut self, shape: AnyShapeA, material: Material<S>) -> InstanceId {
+        let id = InstanceId::from(self.primitives.len() as u64);
+        let instance = ShapeInstance::new(id, shape, glam::Affine3A::IDENTITY);
+        self.primitives.push(Primitive::Instance { shape: instance });
+        self.materials.push(material);
+        id
     }
 
     pub fn add_sphere(&mut self, sphere: Sphere, material: Material<S>) -> InstanceId {
-        self.add_shape(sphere, material)
+        self.add_shape(AnyShapeA::Sphere(sphere.into()), material)
     }
 
     pub fn add_plane(&mut self, plane: Plane, material: Material<S>) -> InstanceId {
-        self.add_shape(plane, material)
+        self.add_shape(AnyShapeA::Plane(plane.into()), material)
     }
 
     pub fn add_light(&mut self, light: L) -> LightId {
@@ -235,26 +162,34 @@ where
         let bounds = if let Some(b) = self.explicit_bounds {
             b
         } else {
-            let mut acc = Aabb::empty();
-            let mut has_infinite = false;
-            for entry in &self.shapes {
-                match entry.shape.bounds() {
-                    Some(b) => acc = acc.union(&b),
-                    None => has_infinite = true,
-                }
-            }
-            if has_infinite {
-                Aabb::empty()
-            } else {
-                acc
-            }
+            compute_bounds(&self.primitives)
         };
+        let accelerator = BruteForce::new(self.primitives);
+        let table = ResourceTable::new(BTreeMap::new(), BTreeMap::new());
         SimpleScene {
             bounds,
-            shapes: self.shapes,
+            accelerator,
+            table,
+            materials: self.materials,
             lights: self.lights,
             light_sampler: self.light_sampler,
             infinite_light: self.infinite_light,
         }
     }
+}
+
+/// 计算场景整体 AABB。
+///
+/// 任一图元无界（无限平面）时返回 [`Aabb::empty`]——与旧实现语义一致，
+/// 表示"场景没有有限包围盒"。上层用 `is_empty()` 判断。
+fn compute_bounds(primitives: &[Primitive]) -> Aabb {
+    let mut acc = Aabb::empty();
+    for p in primitives {
+        let b = p.bounds();
+        if !(b.min().is_finite() && b.max().is_finite()) {
+            return Aabb::empty();
+        }
+        acc = acc.union(&b);
+    }
+    acc
 }

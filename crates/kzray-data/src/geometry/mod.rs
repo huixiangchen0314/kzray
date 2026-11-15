@@ -6,7 +6,12 @@ pub mod curve;
 pub mod mesh;
 pub mod surface;
 pub mod aabb;
+pub mod shape;
+
+
 pub use attribute::{AttributeBuffer, AttributeValues};
 pub use mesh::{Mesh, SubMesh};
 pub use surface::VisibleSurface;
 pub use aabb::Aabb;
+
+pub use shape::{Plane, Sphere};

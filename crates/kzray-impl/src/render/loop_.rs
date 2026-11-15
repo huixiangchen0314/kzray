@@ -1,38 +1,31 @@
 //! 渲染主循环。
 //!
-//! 单线程遍历所有像素 × 样本，串联相机 → 积分器 → 胶片。
+//! 按行并行（`rayon`）。每行 clone 一个 `Sampler`——同一行内像素顺序
+//! 处理，不同行完全并行。
 //!
-//! # 采样维度
+//! # 为什么每行 clone 而不是每线程 clone
 //!
-//! 每个像素的每个样本：
+//! `rayon::map_init` 可以每线程 clone 一次，但需要 `Sync` 的 init 闭包。
+//! 每行 clone 更简单——`PCGSampler` 的 clone 是 `Pcg64Mcg`（`u128`）+ `u64`
+//! 的拷贝，开销可忽略（600 行 × ~50ns = 30μs，相比 18s 渲染时间可忽略）。
 //!
-//! ```text
-//! 像素抖动  next_2d(0)  → 维度 0, 1
-//! 透镜样本  next_2d(2)  → 维度 2, 3
-//! 时间样本  next_f32(4) → 维度 4
-//! ```
+//! # 种子独立性
 //!
-//! `PathIntegrator::li` 内部的 `dim` 从 0 开始，与相机采样的维度 0-4
-//! **重叠**。
+//! 每行 clone 的 `PCGSampler` 字段相同（同 `seed`），但 `start_pixel_sample`
+//! 内部用 `(seed, pixel, sample_index)` hash，不同像素产生不同随机数序列。
+//! 跨行不相关。跨像素不相关。
 //!
-//! **当前不影响结果**：`PCGSampler` 忽略 `dimension` 参数——每次
-//! `next_f32` / `next_2d` 独立生成随机数，与维度索引无关。所以维度
-//! 重叠只影响 Sobol / Halton 等低差异采样器。
+//! # 维度
 //!
-//! **将来加 Sobol 时必须修复**：两个方案：
-//!
-//! - `Integrator::li` 加 `start_dim: u32` 参数，渲染循环传 `5`；
-//! - 或 `PathIntegrator::li` 内部用固定偏移（如 `dim = 16` 开始）。
-//!
-//! 后者不干净但无需改契约；前者需要改 `Integrator` trait。留待加
-//! Sobol 时决策。
+//! 相机采样消耗维度 0-4（像素 2 + 透镜 2 + 时间 1），`li` 从维度 5 开始。
 //!
 //! # 并发
 //!
-//! 单线程。阶段 6 用 `rayon` 按行并行，每线程自己的 `PCGSampler`。
-//! `Film::add_sample` 已支持 `&self` 并发写入。
+//! `Film::add_sample` 用 `&self`，内部 `Mutex` 保护。多线程竞争锁——第一版
+//! 先这样，profile 后如瓶颈改分块。
 
 use glam::{UVec2, Vec2};
+use rayon::prelude::*;
 
 use kzray_abs::camera::Camera;
 use kzray_abs::film::Film;
@@ -44,7 +37,6 @@ use kzray_abs::spectrum::SpectralAlgebra;
 
 use kzray_data::Image;
 
-
 // ═══════════════════════════════════════════════════════════════
 // RenderConfig
 // ═══════════════════════════════════════════════════════════════
@@ -54,7 +46,7 @@ use kzray_data::Image;
 pub struct RenderConfig {
     /// 每像素采样数。
     pub samples_per_pixel: u32,
-    /// 采样器全局种子。相同种子 + 相同场景 → 相同结果。
+    /// 采样器全局种子。相同种子 + 相同场景 + 相同线程数 → 相同结果。
     pub seed: u64,
 }
 
@@ -71,34 +63,32 @@ impl RenderConfig {
 // render
 // ═══════════════════════════════════════════════════════════════
 
-/// 渲染一帧。
+/// 渲染一帧。按行并行。
 ///
-/// 遍历所有像素 × 样本，每样本：
+/// # 泛型约束
 ///
-/// 1. `sampler.start_pixel_sample(pixel, s)` 重置采样器；
-/// 2. 采样像素抖动 `(u, v)`、透镜样本、时间；
-/// 3. `camera.gen_ray` 生成主光线；
-/// 4. `integrator.li` 计算辐射亮度；
-/// 5. 乘 `W_e` 权重后 `film.add_sample`。
+/// - `SM: Sampler + Clone + Sync`：`Sampler` 已要求 `Send`，这里加 `Clone`
+///   （每行 clone）和 `Sync`（共享引用 `&SM` 跨线程捕获）。
+/// - `C: Camera<S>` / `SC: Scene<...>` / `I: Integrator<...>` / `F: Film<...>`：
+///   都已 `Send + Sync`（契约层要求），无需额外约束。
 ///
-/// 最后 `film.resolve()` 得到 `Image`。
+/// # 种子
 ///
-/// # 参数
+/// `base_sampler` 按值传入，`render` 拥有它。每行 `base_sampler.clone()`，
+/// 克隆后的实例字段相同（同 seed），但 `start_pixel_sample(pixel, ...)`
+/// 内部用 pixel hash，不同像素产生不同序列。
 ///
-/// - `camera`：相机。`gen_ray` 的 `pixel_sample` 是归一化屏幕坐标
-///   `[0, 1]²`，渲染循环负责把 `(x + jitter, y + jitter) / (W, H)`
-///   转换好传入；
-/// - `scene`：场景只读视图；
-/// - `integrator`：积分器；
-/// - `film`：胶片。`Output` 必须是 `Image`；
-/// - `config`：采样数与种子；
-/// - `wavelengths`：波长上下文。
+/// # 线程数
+///
+/// 由 `rayon` 全局线程池决定（`RAYON_NUM_THREADS` 环境变量或 CPU 核心数）。
+/// 调用方可以通过 `rayon::ThreadPoolBuilder::new().num_threads(n).build()`
+/// 自定义线程池。
 pub fn render<S, LS, C, F, SC, L, IL, I, SM>(
     camera: &C,
     scene: &SC,
     integrator: &I,
     film: &F,
-    sampler: &mut SM,
+    base_sampler: SM,
     config: RenderConfig,
     wavelengths: &S::WavelengthContext,
 ) -> Image
@@ -111,7 +101,7 @@ where
     L: Light<S>,
     IL: InfiniteLight<S>,
     I: Integrator<S, LS, SC, L, IL>,
-    SM: Sampler,
+    SM: Sampler + Clone + Sync,
 {
     let res = film.resolution();
     let width_f = res.x as f32;
@@ -119,15 +109,16 @@ where
     let spp = config.samples_per_pixel;
     assert!(spp > 0, "samples_per_pixel must be > 0");
 
+    // 按行并行。每行 clone 一个 sampler。
+    (0..res.y).into_par_iter().for_each(|y| {
+        let mut sampler = base_sampler.clone();
 
-    for y in 0..res.y {
         for x in 0..res.x {
             for s in 0..spp {
                 sampler.start_pixel_sample(UVec2::new(x, y), s);
 
-                // 像素抖动：[0, 1)²
+                // 像素抖动
                 let (jx, jy) = sampler.next_2d(0);
-                // 归一化屏幕坐标
                 let pixel_sample = Vec2::new(
                     (x as f32 + jx) / width_f,
                     (y as f32 + jy) / height_f,
@@ -137,35 +128,30 @@ where
                 let lens_sample = sampler.next_2d(2);
 
                 // 时间采样
-                let time_sample = sampler.next_f32(4);
-                let time = camera.sample_time(time_sample);
+                let time = camera.sample_time(sampler.next_f32(4));
 
                 // 生成主光线
-                let cam_sample = match camera.gen_ray(pixel_sample,
-                    Vec2::from(lens_sample), time, wavelengths)
-                {
-                    Some(cs) => cs,
-                    None => continue,
-                };
+                let cam_sample =
+                    match camera.gen_ray(
+                        pixel_sample,
+                        Vec2::from(lens_sample),
+                        time, wavelengths) {
+                            Some(cs) => cs,
+                            None => continue,
+                        };
 
-                // 追踪
                 // 相机采样消耗维度 0-4，li 从维度 5 开始
-                let radiance = integrator.li(
-                    scene,
-                    &cam_sample.ray,
-                    sampler,
-                    5,
-                    wavelengths,
-                );
+                let radiance =
+                    integrator.li(scene, &cam_sample.ray, &mut sampler, 5, wavelengths);
 
                 // 乘相机权重 W_e
                 let weighted = radiance.mul(&cam_sample.weight);
 
-                // 累加到胶片。weight=1.0，filter 权重在 film 内部归一化。
+                // 累加到胶片
                 film.add_sample(cam_sample.film_position, weighted, wavelengths, 1.0);
             }
         }
-    }
+    });
 
     film.resolve()
 }

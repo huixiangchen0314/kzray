@@ -17,13 +17,13 @@ pub mod sampler;
 pub mod bsdf;
 pub mod material;
 pub mod camera;
-pub mod accel;
 pub mod light;
 pub mod spectrum;
 pub mod sensor;
 pub mod film;
 pub mod scene;
 pub mod integrator;
+pub mod quantity;
 
 // ---- 能量代数 ----
 pub use spectrum::{
@@ -47,3 +47,6 @@ pub use film::{Film, AdaptiveFilm, FilmWithVisibleSurface};
 pub use material::{Material, BSDFBuilder, BXDFBuilder};
 pub use scene::Scene;
 pub use integrator::Integrator;
+pub use quantity::{
+    Area, Delta, Measure, MisPdf, PathSpace, RandomWalk, Pdf, SolidAngle,
+};

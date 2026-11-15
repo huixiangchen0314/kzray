@@ -3,7 +3,7 @@
 use kzray_data::common::{
     EntityId, FieldId, MeshId, HasMeta, MaterialId, Meta, Param, Transform,
 };
-use kzray_data::input::{RenderInstance, VisibilityFlags};
+use kzray_data::input::{MeshInstance, VisibilityFlags};
 
 fn roundtrip<T>(v: &T) -> Vec<u8>
 where
@@ -42,7 +42,7 @@ fn visibility_custom() {
 
 #[test]
 fn minimal_instance() {
-    let inst = RenderInstance {
+    let inst = MeshInstance {
         geometry: MeshId(EntityId::from_name("quad")),
         material_refs: vec![MaterialId(EntityId::from_name("mat_red"))],
         world_transform: Transform::IDENTITY,
@@ -55,7 +55,7 @@ fn minimal_instance() {
 
 #[test]
 fn instance_with_displacement() {
-    let inst = RenderInstance {
+    let inst = MeshInstance {
         geometry: MeshId(EntityId::from_name("sphere")),
         material_refs: vec![MaterialId(EntityId::from_name("mat_glass"))],
         world_transform: Transform::IDENTITY,
@@ -69,7 +69,7 @@ fn instance_with_displacement() {
 #[test]
 fn instance_with_multiple_materials() {
     // 多子网格材质：material_refs 有多个槽
-    let inst = RenderInstance {
+    let inst = MeshInstance {
         geometry: MeshId(EntityId::from_name("multi_mat_mesh")),
         material_refs: vec![
             MaterialId(EntityId::from_name("mat_a")),
@@ -87,7 +87,7 @@ fn instance_with_multiple_materials() {
 
 #[test]
 fn instance_with_world_transform() {
-    let inst = RenderInstance {
+    let inst = MeshInstance {
         geometry: MeshId(EntityId::from_name("box")),
         material_refs: vec![],
         world_transform: Transform::from_cols([
@@ -108,7 +108,7 @@ fn instance_carries_meta() {
     let mut meta = Meta::new();
     meta.insert("name", Param::from_str("hero_ball"));
     meta.insert("render_layer", Param::from_str("fg"));
-    let inst = RenderInstance {
+    let inst = MeshInstance {
         geometry: MeshId(EntityId::from_name("sphere")),
         material_refs: vec![],
         world_transform: Transform::IDENTITY,

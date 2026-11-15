@@ -5,18 +5,19 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::camera::CameraData;
+use crate::common::id::{PlaneId, SphereId};
 use crate::common::{
     DataError, FieldExpr, FieldId, MeshId, LightId, MaterialId, Node, NodeId, 
     Param, VolumeId,
 };
 use crate::config::RenderConfig;
-use crate::geometry::Mesh;
+use crate::geometry::{Mesh, Plane};
+use crate::input::MeshInstance;
 use crate::light::LightData;
 use crate::shading::Material;
 use crate::volume::VolumeInstance;
 use crate::world::WorldData;
 
-use super::instance::RenderInstance;
 
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug)]
 pub struct RenderInput {
@@ -28,8 +29,12 @@ pub struct RenderInput {
     pub materials: BTreeMap<MaterialId, Material>,
     /// 网格
     pub meshes: BTreeMap<MeshId, Mesh>,
+    /// 球数据
+    pub spheres: BTreeMap<SphereId, SphereId>,
+    /// 平面数据
+    pub planes: BTreeMap<PlaneId, Plane>,
     /// 渲染实例
-    pub instances: Vec<RenderInstance>,
+    pub instances: Vec<MeshInstance>,
     /// 灯光
     pub lights: BTreeMap<LightId, LightData>,
     /// 体积
@@ -49,6 +54,8 @@ impl RenderInput {
             nodes: BTreeMap::new(),
             materials: BTreeMap::new(),
             meshes: BTreeMap::new(),
+            spheres: BTreeMap::new(),
+            planes: BTreeMap::new(),
             instances: Vec::new(),
             lights: BTreeMap::new(),
             volumes: BTreeMap::new(),

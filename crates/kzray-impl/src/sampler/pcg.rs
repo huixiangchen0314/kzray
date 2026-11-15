@@ -37,6 +37,7 @@ use kzray_abs::sampler::Sampler;
 ///
 /// PCG 不依赖 `dimension`——每次 `next_f32` 独立生成随机数，与维度
 /// 索引无关。`dimension` 参数被忽略。
+#[derive(Clone)]
 pub struct PCGSampler {
     /// 底层 RNG。`start_pixel_sample` 时重新 seed。
     rng: Pcg64Mcg,

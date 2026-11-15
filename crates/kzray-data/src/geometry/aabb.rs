@@ -1,3 +1,4 @@
+//! kzray-data/src/geometry/aabb.rs
 //! 轴对齐包围盒（AABB）。
 //!
 //! `Aabb` 是纯几何数据：轴对齐的最小/最大角点，用于世界范围、
