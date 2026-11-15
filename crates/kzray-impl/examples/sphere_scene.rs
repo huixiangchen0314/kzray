@@ -21,6 +21,11 @@
 //! `Scene` / `SimpleScene` / `SimpleSceneBuilder` / `Integrator` 的
 //! `DL` / `IL` / `AL` 三个光源泛型独立。本示例只用 delta 光源（点光源），
 //! `IL` / `AL` 泛型仍需要指定——用标准 enum 但空实例化。
+//!
+//! # id 分配
+//!
+//! `InstanceId` / `LightId` 由 example 硬编码（小场景手动分配，
+//! 分布式场景由全局分配器分配）。builder 只做冲突检测，不做本地分配。
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -32,7 +37,7 @@ use kzray_abs::material::Material;
 use kzray_abs::sensor::RgbSensor;
 use kzray_abs::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
 use kzray_data::TextureId;
-use kzray_data::common::LightId;
+use kzray_data::common::{InstanceId, LightId};
 use kzray_math::filter::BoxFilter;
 
 use kzray_impl::camera::pinhole::{PinholeCamera, PinholeCameraConfig};
@@ -99,6 +104,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         shutter_close: 0.0,
     });
 
+    // ─── id 硬编码 ───
+    //
+    // 小场景手动分配 id；分布式场景由全局分配器保证唯一性。
+    // builder 的 `add_plane` / `add_sphere` / `add_delta_light` 都要求
+    // 调用方显式传入 id，builder 只做冲突检测、不做本地分配。
+    let floor_id = InstanceId::from(0);
+    let ball_id = InstanceId::from(1);
+    let point_light_id = LightId::from(0);
+
     // ─── 场景 ───
     let mut builder = Builder::new();
 
@@ -129,18 +143,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let checker_mat0 = Material::bsdf(Arc::new(LambertBSDFBuilder::new(checker_tex0)));
     let checker_mat1 = Material::bsdf(Arc::new(LambertBSDFBuilder::new(checker_tex1)));
 
-    builder.add_plane(Plane::horizontal(-1.0), checker_mat0);
-    builder.add_sphere(Sphere::new(Vec3::ZERO, 1.0), checker_mat1);
+    // 地面 + 球（InstanceId 由外部指定）
+    builder.add_plane(floor_id, Plane::horizontal(-1.0), checker_mat0);
+    builder.add_sphere(ball_id, Sphere::new(Vec3::ZERO, 1.0), checker_mat1);
 
     // ─── 点光源（delta 光源）───
     //
-    // `add_delta_light` 返回全局唯一的 `LightId`，供光源采样器使用。
-    let point_light_id: LightId = builder.add_delta_light(AnyDeltaLight::Point(
-        PointLight::new(
+    // `add_delta_light` 只做冲突检测，不返回 id——`LightId` 由调用方
+    // 持有，供光源采样器使用。
+    builder.add_delta_light(
+        point_light_id,
+        AnyDeltaLight::Point(PointLight::new(
             Vec3::new(5.0, 5.0, 5.0),
             SpectrumRgb::new(100.0, 100.0, 100.0),
-        ),
-    ));
+        )),
+    );
 
     // ─── 构建场景 ───
     let scene: Sc = builder

@@ -10,9 +10,9 @@ use kzray_abs::ray::{AreaLightHit, Hit, Ray, SurfaceHit};
 use kzray_abs::scene::Scene;
 use kzray_abs::spectrum::SpectralAlgebra;
 use kzray_abs::Library;
-use kzray_data::TextureId;
 use kzray_data::common::{InstanceId, LightId};
 use kzray_data::geometry::Aabb;
+use kzray_data::TextureId;
 
 use crate::accel::ShapeInstance;
 use crate::accel::{Accelerator, BruteForce, InstanceHit, Primitive, PrimitiveHit};
@@ -22,21 +22,14 @@ use crate::geometry::{AnyShapeA, Plane, Sphere};
 // SimpleScene
 // ═══════════════════════════════════════════════════════════════
 
-/// 简单场景。`DL` / `IL` / `AL` 三个光源泛型完全独立——用户可分别
-/// 替换为自定义光源类型。
+/// 简单场景。`DL` / `IL` / `AL` 三个光源泛型独立。
 ///
-/// # 存储布局
+/// # id 由外部指定
 ///
-/// - `delta_lights: BTreeMap<LightId, DL>`——delta 光源，按 id 查
-///   （NEE 采样器选中后按 id 找）；
-/// - `area_lights: BTreeMap<LightId, AL>`——面积光，按 id 查（同 NEE）；
-/// - `infinite_lights: Vec<IL>`——无限远光源，**无 id**。环境光 / 天空
-///   光通常是全局的，不需要被"选中某一个"——所有逃逸光线求辐射亮度时
-///   遍历求和。NEE 通常不采样无限远光源（无有限 pdf 测度），逃逸时
-///   直接累加即可。
-///
-/// `LightId` 由 `SimpleSceneBuilder` 全局分配，只用于 delta / 面积光，
-/// 两类 id 不重叠。
+/// `InstanceId` / `LightId` 都从外部传入（分布式场景由全局分配器
+/// 保证唯一性）。`SimpleSceneBuilder` 只做冲突检测，不做本地分配。
+/// `primitives` / `materials` / `delta_lights` / `area_lights` 都是
+/// `BTreeMap<Id, _>`——支持任意 id 值，不要求连续。
 pub struct SimpleScene<S, LS, DL, IL, AL>
 where
     S: SpectralAlgebra,
@@ -48,7 +41,7 @@ where
     bounds: Aabb,
     accelerator: BruteForce,
     library: Library<S>,
-    materials: Vec<Material<S>>,
+    materials: BTreeMap<InstanceId, Material<S>>,
     delta_lights: BTreeMap<LightId, DL>,
     area_lights: BTreeMap<LightId, AL>,
     infinite_lights: Vec<IL>,
@@ -73,14 +66,12 @@ where
             PrimitiveHit::Instance(InstanceHit::Shape(instance_id, shape_hit)) => {
                 Some(Hit::Surface(shape_hit.into_surface_hit_prim(instance_id)))
             }
-            PrimitiveHit::Instance(InstanceHit::AreaLight(
-                instance_id,
-                light_id,
-                shape_hit,
-            )) => Some(Hit::AreaLight(AreaLightHit {
-                hit: shape_hit.into_surface_hit_prim(instance_id),
-                light_id,
-            })),
+            PrimitiveHit::Instance(InstanceHit::AreaLight(instance_id, light_id, shape_hit)) => {
+                Some(Hit::AreaLight(AreaLightHit {
+                    hit: shape_hit.into_surface_hit_prim(instance_id),
+                    light_id,
+                }))
+            }
         }
     }
 
@@ -89,8 +80,7 @@ where
     }
 
     fn material(&self, hit: &SurfaceHit) -> Option<&Material<S>> {
-        let idx = hit.instance_id.as_u64() as usize;
-        self.materials.get(idx)
+        self.materials.get(&hit.instance_id)
     }
 
     #[inline]
@@ -129,15 +119,12 @@ where
     IL: InfiniteLight<S>,
     AL: AreaLight<S>,
 {
-    primitives: Vec<Primitive>,
+    primitives: BTreeMap<InstanceId, Primitive>,
     library: Library<S>,
-    materials: Vec<Material<S>>,
+    materials: BTreeMap<InstanceId, Material<S>>,
     delta_lights: BTreeMap<LightId, DL>,
     area_lights: BTreeMap<LightId, AL>,
     infinite_lights: Vec<IL>,
-    /// 全局 `LightId` 计数器。delta 和面积光共用，保证 id 不重叠。
-    /// 无限远光源不占用 id——它们按位置索引。
-    next_light_id: u64,
     light_sampler: Option<LS>,
     explicit_bounds: Option<Aabb>,
 }
@@ -152,13 +139,12 @@ where
 {
     pub fn new() -> Self {
         Self {
-            primitives: Vec::new(),
+            primitives: BTreeMap::new(),
             library: Library::new(),
-            materials: Vec::new(),
+            materials: BTreeMap::new(),
             delta_lights: BTreeMap::new(),
             area_lights: BTreeMap::new(),
             infinite_lights: Vec::new(),
-            next_light_id: 0,
             light_sampler: None,
             explicit_bounds: None,
         }
@@ -174,69 +160,101 @@ where
     }
 
     // ── 几何 ────────────────────────────────────────────────
+    //
+    // `InstanceId` 由调用方指定。builder 只做冲突检测。
 
-    pub fn add_shape(&mut self, shape: AnyShapeA, material: Material<S>) -> InstanceId {
-        self.add_shape_inner(shape, material, None)
+    /// 添加任意 `Primitive`。`InstanceId` 从 `primitive.instance_id()`
+    /// 取——各变体内部自带 id，用户构造 `Primitive` 时已指定。
+    ///
+    /// 这是几何注册的**底层入口**。`add_shape` / `add_sphere` /
+    /// `add_plane` 是便利包装，内部调 `add_primitive`。
+    ///
+    /// 面积光要可见（参与求交），用户手动构造
+    /// `Primitive::ShapeAreaLight(accel::ShapeAreaLight { ... })` 后调
+    /// 本方法——几何视图与 light 视图通过同一 `LightId` 关联。
+     pub fn add_primitive(&mut self, primitive: Primitive, material: Material<S>) {
+        let id = primitive.instance_id();
+        let old = self.primitives.insert(id, primitive);
+        assert!(
+            old.is_none(),
+            "duplicate InstanceId {id:?}: already exists in SimpleSceneBuilder"
+        );
+        let old = self.materials.insert(id, material);
+        debug_assert!(old.is_none(), "materials desync from primitives");
     }
 
+    /// 添加解析形状几何（静态变换，无 alpha）。便利方法。
+    pub fn add_shape(
+        &mut self,
+        id: InstanceId,
+        shape: AnyShapeA,
+        material: Material<S>,
+    ) {
+        self.add_shape_inner(id, shape, material, None);
+    }
+
+    /// 添加带 alpha cutout 的解析形状几何。便利方法。
     pub fn add_shape_with_alpha(
         &mut self,
+        id: InstanceId,
         shape: AnyShapeA,
         material: Material<S>,
         alpha: TextureId,
-    ) -> InstanceId {
-        self.add_shape_inner(shape, material, Some(alpha))
+    ) {
+        self.add_shape_inner(id, shape, material, Some(alpha));
     }
 
     fn add_shape_inner(
         &mut self,
+        id: InstanceId,
         shape: AnyShapeA,
         material: Material<S>,
         alpha: Option<TextureId>,
-    ) -> InstanceId {
-        let id = InstanceId::from(self.primitives.len() as u64);
+    ) {
         let mut instance = ShapeInstance::new(id, shape, Affine3A::IDENTITY);
         if let Some(a) = alpha {
             instance = instance.with_alpha(a);
         }
-        self.primitives.push(Primitive::Shape(instance));
-        self.materials.push(material);
-        id
+        self.add_primitive(Primitive::Shape(instance), material);
     }
 
-    pub fn add_sphere(&mut self, sphere: Sphere, material: Material<S>) -> InstanceId {
-        self.add_shape(AnyShapeA::Sphere(sphere.into()), material)
+    /// 添加球体几何。便利方法。
+    pub fn add_sphere(&mut self, id: InstanceId, sphere: Sphere, material: Material<S>) {
+        self.add_shape(id, AnyShapeA::Sphere(sphere.into()), material);
     }
 
-    pub fn add_plane(&mut self, plane: Plane, material: Material<S>) -> InstanceId {
-        self.add_shape(AnyShapeA::Plane(plane.into()), material)
+    /// 添加无限平面几何。便利方法。
+    pub fn add_plane(&mut self, id: InstanceId, plane: Plane, material: Material<S>) {
+        self.add_shape(id, AnyShapeA::Plane(plane.into()), material);
     }
+
 
     // ── 光源 ────────────────────────────────────────────────
+    //
+    // `LightId` 由调用方指定。builder 只做冲突检测。
 
-    /// 添加 delta 光源（点光源、方向光等）。返回全局唯一的 `LightId`。
-    pub fn add_delta_light(&mut self, light: DL) -> LightId {
-        let id = LightId::from(self.next_light_id);
-        self.next_light_id += 1;
-        self.delta_lights.insert(id, light);
-        id
+    /// 添加 delta 光源。`id` 由调用方指定，已存在则 panic。
+    pub fn add_delta_light(&mut self, id: LightId, light: DL) {
+        let old = self.delta_lights.insert(id, light);
+        assert!(
+            old.is_none(),
+            "duplicate LightId {id:?}: already exists in delta_lights"
+        );
     }
 
-    /// 添加面积光。返回全局唯一的 `LightId`，与 delta 光源不重叠。
+    /// 添加面积光。`id` 由调用方指定，已存在则 panic。
     ///
-    /// `AL` 是泛型——用户构造任意实现 `AreaLight<S>` 的类型传入
-    /// （标准实现 `AnyAreaLight::ShapeArea(...)`）。
-    pub fn add_area_light(&mut self, light: AL) -> LightId {
-        let id = LightId::from(self.next_light_id);
-        self.next_light_id += 1;
-        self.area_lights.insert(id, light);
-        id
+    /// `AL` 是泛型——用户构造任意实现 `AreaLight<S>` 的类型传入。
+    pub fn add_area_light(&mut self, id: LightId, light: AL) {
+        let old = self.area_lights.insert(id, light);
+        assert!(
+            old.is_none(),
+            "duplicate LightId {id:?}: already exists in area_lights"
+        );
     }
 
-    /// 添加无限远光源（环境光、天空光等）。**无 id、无返回值**。
-    ///
-    /// 无限远光源是全局的——逃逸光线累加时遍历所有无限远光源求和。
-    /// 通常场景只有一个环境光，但接口允许添加多个（如分层天空光）。
+    /// 添加无限远光源。**无 id**——无限远光源是全局的，逃逸光线遍历
+    /// 求和。
     pub fn add_infinite_light(&mut self, light: IL) {
         self.infinite_lights.push(light);
     }
@@ -257,9 +275,15 @@ where
         let bounds = if let Some(b) = self.explicit_bounds {
             b
         } else {
+            // `compute_bounds` 借 `&self.primitives`，借用结束于函数返回。
             compute_bounds(&self.primitives)
         };
-        let accelerator = BruteForce::new(self.primitives);
+
+        // `into_values()` 消耗 `self.primitives`，把所有权转给 `BruteForce`。
+        // 部分 move 后，`self.materials` / `self.delta_lights` / ... 仍可
+        // 逐字段 move 到新 struct。
+        let accelerator = BruteForce::new(self.primitives.into_values().collect());
+
         SimpleScene {
             bounds,
             accelerator,
@@ -286,10 +310,10 @@ where
     }
 }
 
-fn compute_bounds(primitives: &[Primitive]) -> Aabb {
+fn compute_bounds(primitives: &BTreeMap<InstanceId, Primitive>) -> Aabb {
     use crate::accel::Bounded;
     let mut acc = Aabb::empty();
-    for p in primitives {
+    for p in primitives.values() {
         let b = p.bounds();
         if !(b.min().is_finite() && b.max().is_finite()) {
             return Aabb::empty();

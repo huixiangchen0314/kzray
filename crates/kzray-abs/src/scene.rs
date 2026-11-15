@@ -65,11 +65,13 @@ where
     /// 一个材质），与几何形状无关。
     fn material(&self, hit: &SurfaceHit) -> Option<&Material<S>>;
 
-    /// 查光源。
+    /// Delta 光源查询
     fn delta_light(&self, id: LightId) -> Option<&DL>;
 
+    /// 区域光查询
     fn area_light(&self, id: LightId) -> Option<&AL>;
 
+    /// 无限光查询
     fn infinite_lights(&self) -> &[IL];
     
     /// 光源采样器。无光源时为 `None`。

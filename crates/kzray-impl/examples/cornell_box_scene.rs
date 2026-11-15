@@ -10,6 +10,11 @@
 //! - **简化不做**：当前不做任何简化（如统一 `AnyLight`），重构与优化
 //!   不同时做。`Scene` 的 `DL` / `IL` / `AL` 三个泛型独立，接口稳定后
 //!   再评估是否需要便利抽象。
+//!
+//! # id 分配
+//!
+//! `InstanceId` / `LightId` 由 example 硬编码（小场景手动分配，
+//! 分布式场景由全局分配器分配）。builder 只做冲突检测，不做本地分配。
 
 use std::sync::Arc;
 use std::time::Instant;
@@ -21,7 +26,7 @@ use kzray_abs::material::Material;
 use kzray_abs::sensor::RgbSensor;
 use kzray_abs::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
 use kzray_data::TextureId;
-use kzray_data::common::LightId;
+use kzray_data::common::{InstanceId, LightId};
 use kzray_math::filter::BoxFilter;
 
 use kzray_impl::camera::pinhole::{PinholeCamera, PinholeCameraConfig};
@@ -80,6 +85,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         shutter_close: 0.0,
     });
 
+    // ─── id 硬编码 ───
+    //
+    // `InstanceId` 空间：每个四边形占 2 个（拆成两个三角形），球占 1 个。
+    // 顺序与下方的注册顺序一致，方便对照。
+    //
+    // `LightId` 空间：面积光拆成两个三角形，各占 1 个。
+    let floor_ids = [InstanceId::from(0), InstanceId::from(1)];
+    let ceiling_ids = [InstanceId::from(2), InstanceId::from(3)];
+    let left_ids = [InstanceId::from(4), InstanceId::from(5)];
+    let right_ids = [InstanceId::from(6), InstanceId::from(7)];
+    let back_ids = [InstanceId::from(8), InstanceId::from(9)];
+    let sphere_id = InstanceId::from(10);
+    let light_ids: [LightId; 2] = [LightId::from(0), LightId::from(1)];
+
     // ─── 场景构建器 ───
     let mut builder = Builder::new();
 
@@ -114,61 +133,65 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 地板 y = -1
     // TODO: Quad 图元落地后改为单次 add_shape。
-    for tri in quad(
+    for (id, tri) in floor_ids.into_iter().zip(quad(
         Vec3A::new(-1.0, -1.0, -1.0),
         Vec3A::new(-1.0, -1.0, 1.0),
         Vec3A::new(1.0, -1.0, 1.0),
         Vec3A::new(1.0, -1.0, -1.0),
-    ) {
-        builder.add_shape(tri, white_mat());
+    )) {
+        builder.add_shape(id, tri, white_mat());
     }
 
     // 天花板 y = 1
     // TODO: Quad 图元落地后改为单次 add_shape。
-    for tri in quad(
+    for (id, tri) in ceiling_ids.into_iter().zip(quad(
         Vec3A::new(-1.0, 1.0, -1.0),
         Vec3A::new(1.0, 1.0, -1.0),
         Vec3A::new(1.0, 1.0, 1.0),
         Vec3A::new(-1.0, 1.0, 1.0),
-    ) {
-        builder.add_shape(tri, white_mat());
+    )) {
+        builder.add_shape(id, tri, white_mat());
     }
 
     // 左墙 x = -1，红
     // TODO: Quad 图元落地后改为单次 add_shape。
-    for tri in quad(
+    for (id, tri) in left_ids.into_iter().zip(quad(
         Vec3A::new(-1.0, -1.0, -1.0),
         Vec3A::new(-1.0, 1.0, -1.0),
         Vec3A::new(-1.0, 1.0, 1.0),
         Vec3A::new(-1.0, -1.0, 1.0),
-    ) {
-        builder.add_shape(tri, red_mat());
+    )) {
+        builder.add_shape(id, tri, red_mat());
     }
 
     // 右墙 x = 1，绿
     // TODO: Quad 图元落地后改为单次 add_shape。
-    for tri in quad(
+    for (id, tri) in right_ids.into_iter().zip(quad(
         Vec3A::new(1.0, -1.0, -1.0),
         Vec3A::new(1.0, -1.0, 1.0),
         Vec3A::new(1.0, 1.0, 1.0),
         Vec3A::new(1.0, 1.0, -1.0),
-    ) {
-        builder.add_shape(tri, green_mat());
+    )) {
+        builder.add_shape(id, tri, green_mat());
     }
 
     // 后墙 z = -1，白
     // TODO: Quad 图元落地后改为单次 add_shape。
-    for tri in quad(
+    for (id, tri) in back_ids.into_iter().zip(quad(
         Vec3A::new(-1.0, -1.0, -1.0),
         Vec3A::new(1.0, -1.0, -1.0),
         Vec3A::new(1.0, 1.0, -1.0),
         Vec3A::new(-1.0, 1.0, -1.0),
-    ) {
-        builder.add_shape(tri, white_mat());
+    )) {
+        builder.add_shape(id, tri, white_mat());
     }
 
     // ─── 球：中心 (0, -0.5, 0)，半径 0.5，白 ───
-    builder.add_sphere(Sphere::new(Vec3::new(0.0, -0.5, 0.0), 0.5), white_mat());
+    builder.add_sphere(
+        sphere_id,
+        Sphere::new(Vec3::new(0.0, -0.5, 0.0), 0.5),
+        white_mat(),
+    );
 
     // ─── 面积光：顶部中央小 quad，双面 ───
     //
@@ -182,21 +205,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // TODO: Quad 图元落地后改为单个 `AnyAreaLight::ShapeArea(...)`，
     // 一次 `add_area_light` 拿一个 id。
     let light_radiance = SpectrumRgb::new(15.0, 15.0, 15.0);
-    let mut light_ids: Vec<LightId> = Vec::new();
-    for tri in quad(
+    for (id, tri) in light_ids.into_iter().zip(quad(
         Vec3A::new(-0.3, 0.99, -0.3),
         Vec3A::new(0.3, 0.99, -0.3),
         Vec3A::new(0.3, 0.99, 0.3),
         Vec3A::new(-0.3, 0.99, 0.3),
-    ) {
+    )) {
         let light = ShapeAreaLight::new(tri, Affine3A::IDENTITY, light_radiance).two_sided(true);
-        let id = builder.add_area_light(AnyAreaLight::ShapeArea(light));
-        light_ids.push(id);
+        // `add_area_light` 只做冲突检测，不返回 id——`LightId` 由调用方
+        // 持有，供光源采样器使用。
+        builder.add_area_light(id, AnyAreaLight::ShapeArea(light));
     }
 
     // ─── 构建场景 ───
     let scene: Sc = builder
-        .with_light_sampler(UniformLightSampler::new(light_ids))
+        .with_light_sampler(UniformLightSampler::new(light_ids.to_vec()))
         .build();
 
     // ─── 胶片 ───
