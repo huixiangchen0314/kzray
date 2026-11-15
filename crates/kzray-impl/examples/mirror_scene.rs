@@ -136,8 +136,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     builder.add_delta_light(
         point_light_id,
         AnyDeltaLight::Point(PointLight::new(
-            Vec3::new(5.0, 5.0, 5.0),
-            SpectrumRgb::new(100.0, 100.0, 100.0),
+            Vec3::new(2.0, 10.0, 2.0),
+            SpectrumRgb::new(1000.0, 100.0, 100.0),
         )),
     );
 

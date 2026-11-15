@@ -8,3 +8,4 @@ pub use any::{AnyAreaLight, AnyDeltaLight, AnyInfiniteLight};
 pub use infinite::ConstInfiniteLight;
 pub use point::PointLight;
 pub use shape_area::ShapeAreaLight;
+pub use sampler::{UniformLightSampler, PowerLightSampler};

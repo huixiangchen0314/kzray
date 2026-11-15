@@ -196,6 +196,7 @@ pub mod beckmann {
     ///
     /// Beckmann 没有解析的 VNDF 采样（需要 `erfinv` 或 rejection sampling），
     /// 这是 PBRT-v3、Cycles、Mitsuba 早期版本共用的近似。
+    /// 2018 方法我们之后再做
     #[inline]
     pub fn sample_ndf(alpha: f32, u1: f32, u2: f32) -> Vec3 {
         let phi = 2.0 * PI * u2;
@@ -215,14 +216,14 @@ pub mod beckmann {
     }
 
     fn erf_approx(x: f32) -> f32 {
-        let sign = x.signum();
+        let sign = x.signum() as f64;
         let x = x.abs();
-        let t = 1.0 / (1.0 + 0.3275911 * x);
+        let t = 1.0 / (1.0 + 0.3275911 * x) as f64;
         let y = 1.0
             - (((((1.061405429 * t - 1.453152027) * t) + 1.421413741) * t - 0.284496736) * t
                 + 0.254829592)
                 * t
-                * (-x * x).exp();
-        sign * y
+                * (-x * x).exp() as f64;
+        (sign * y) as f32
     }
 }

@@ -1,3 +1,4 @@
+//! kzray-math/src/fresnel.rs
 //! Fresnel 反射率。介电（玻璃、水）和导体（金属）的两种精确公式，
 //! 外加 Schlick 近似。
 //!
