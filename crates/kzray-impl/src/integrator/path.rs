@@ -86,7 +86,6 @@ where
         let mut dim = start_dim;
 
         loop {
-            
             // ─── 求交 ───
             let hit = match scene.intersect(&current_ray, 0.0..f32::INFINITY) {
                 Some(h) => h,
@@ -107,7 +106,13 @@ where
             };
 
             let wo = -current_ray.dir.normalize();
-            let bsdf = match material.build_bsdf(&hit, wo, sampler, wavelengths) {
+            let bsdf = match material.build_bsdf(
+                &hit,
+                wo,
+                sampler,
+                wavelengths,
+                scene.library(), // ← 新增
+            ) {
                 Some(b) => b,
                 None => break,
             };
@@ -130,7 +135,6 @@ where
                             if let Some(li) =
                                 light.sample_li(&ctx, Vec2::new(dim1, dim2), wavelengths)
                             {
-                                
                                 // 阴影射线
                                 let occluded = match li.geometry {
                                     LiGeometry::Surface { position, .. } => {
@@ -156,7 +160,7 @@ where
                                     let f = bsdf.eval(li.wi, TransportMode::Radiance);
                                     let cos_theta = ctx.normal.dot(li.wi).max(0.0);
 
-                                     // 关键修复：delta 光源的 li.pdf 无有限值（填 0.0
+                                    // 关键修复：delta 光源的 li.pdf 无有限值（填 0.0
                                     // 作为占位），不能直接乘进 light_pdf。delta 光源的
                                     // 方向由几何唯一确定，采样 PDF 就是"选择该光源的
                                     // 概率" sel.light_pdf。
@@ -171,8 +175,7 @@ where
                                         let mis_weight = if is_delta {
                                             1.0
                                         } else {
-                                            let bsdf_pdf =
-                                                bsdf.pdf(li.wi, TransportMode::Radiance);
+                                            let bsdf_pdf = bsdf.pdf(li.wi, TransportMode::Radiance);
                                             power_heuristic(light_pdf, bsdf_pdf)
                                         };
 

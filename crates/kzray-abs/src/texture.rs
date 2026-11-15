@@ -255,7 +255,7 @@ pub trait Texture<C: Channel> {
 //
 // 用法：
 //
-// ```ignore
+// ```text
 // fn alpha_cutout(tex: &AlphaTexture, uv: Vec2) -> bool {
 //     tex.eval(uv, None) >= ALPHA_THRESHOLD
 // }

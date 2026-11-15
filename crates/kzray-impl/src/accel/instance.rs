@@ -78,7 +78,7 @@ pub(crate) fn intersect_with_transform<S: SpectralAlgebra>(
     // ── alpha 判定：透明则视为未命中 ──
     if let Some(id) = alpha {
         let tex = lib.alpha(id);           // &AlphaTexture
-        let a = tex.eval(local_hit.uv, None); // f32
+        let a = tex.eval(local_hit.uv, None); // 不需要微分射线
         if a < ALPHA_THRESHOLD {
             return None;
         }

@@ -21,10 +21,13 @@ use std::time::Instant;
 
 use glam::{UVec2, Vec2, Vec3};
 
+use kzray_abs::AlbedoChannel;
 use kzray_abs::material::Material;
 use kzray_abs::sensor::RgbSensor;
 use kzray_abs::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
+use kzray_data::TextureId;
 use kzray_data::common::LightId;
+use kzray_impl::ConstantTexture;
 use kzray_math::filter::BoxFilter;
 
 use kzray_impl::camera::pinhole::{PinholeCamera, PinholeCameraConfig};
@@ -66,17 +69,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // ─── 场景 ───
     let mut builder = SimpleSceneBuilder::<SpectrumRgb, LS, Lt, IL>::new();
-
-    let red_material = Material::bsdf(Arc::new(LambertBSDFBuilder::new(SpectrumRgb::new(
-        0.8, 0.2, 0.2,
-    ))));
+    let red_albedo_id = TextureId::from(0);
+    let gray_albedo_id = TextureId::from(1);
+    // 先注册 albedo 纹理，再构造材质
+    builder.library_mut().add_albedo(
+        red_albedo_id,
+        Box::new(ConstantTexture::<AlbedoChannel<SpectrumRgb>>::new(
+            SpectrumRgb::new(0.8, 0.2, 0.2),
+        )),
+    );
+    let red_material = Material::bsdf(Arc::new(
+        LambertBSDFBuilder::new(red_albedo_id)));
     builder.add_sphere(Sphere::new(Vec3::ZERO, 1.0), red_material);
 
-    let gray_material = Material::bsdf(Arc::new(LambertBSDFBuilder::new(SpectrumRgb::new(
-        0.5, 0.5, 0.5,
-    ))));
+    builder.library_mut().add_albedo(
+        gray_albedo_id,
+        Box::new(ConstantTexture::<AlbedoChannel<SpectrumRgb>>::new(
+            SpectrumRgb::new(0.5, 0.5, 0.5),
+        )),
+    );
+    let gray_material = Material::bsdf(Arc::new(
+        LambertBSDFBuilder::new(gray_albedo_id)));
     builder.add_plane(Plane::horizontal(-1.0), gray_material);
-
+    
     builder.add_light(AnyLight::Point(PointLight::new(
         Vec3::new(5.0, 5.0, 5.0),
         SpectrumRgb::new(100.0, 100.0, 100.0),

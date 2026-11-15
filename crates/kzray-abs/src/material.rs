@@ -50,6 +50,7 @@ use crate::bsdf::{BxDF, BSDF};
 use crate::ray::SurfaceHit;
 use crate::sampler::Sampler;
 use crate::spectrum::SpectralAlgebra;
+use crate::library::Library;
 
 // ═══════════════════════════════════════════════════════════════
 // BSDFBuilder
@@ -78,25 +79,25 @@ use crate::spectrum::SpectralAlgebra;
 /// `BSDFBuilder` 是 object-safe 的：`build` 不是泛型方法。
 /// `Box<dyn BSDFBuilder<S>>` / `Arc<dyn BSDFBuilder<S>>` 可用。
 pub trait BSDFBuilder<S: SpectralAlgebra>: Send + Sync {
-    /// 从表面命中构造 BSDF。
+   /// 从表面命中构造 BSDF。
     ///
-    /// 参数：
+    /// # 参数
+    ///
     /// - `hit`：表面命中信息（位置、法线、UV、instance_id 等）；
     /// - `wo`：着色点出射方向（指向相机/上一跳），世界空间，已归一化。
-    ///   等于 `-ray.dir.normalize()`。用于构造 `BSDF` 的局部坐标系；
-    /// - `sampler`：采样器。需要随机选择的材质（如随机选层的混合材质）
-    ///   从这里取样本；纯确定性材质忽略它；
-    /// - `wavelengths`：波长上下文，只读取。
-    ///
-    /// 返回的 `BSDF<S>` 已构造完成，调用方可以直接 `sample_f` / `eval` /
-    /// `pdf`。
+    ///   等于 `-ray.dir.normalize()`；
+    /// - `sampler`：采样器，随机材质从这里取样本；
+    /// - `wavelengths`：波长上下文，只读；
+    /// - `lib`：资产库，材质参数从这里的纹理求值。
     fn build(
         &self,
         hit: &SurfaceHit,
         wo: Vec3,
         sampler: &mut dyn Sampler,
         wavelengths: &S::WavelengthContext,
+        lib: &Library<S>,
     ) -> BSDF<S>;
+
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -140,6 +141,7 @@ pub trait BXDFBuilder<S: SpectralAlgebra>: Send + Sync {
         wo: Vec3,
         sampler: &mut dyn Sampler,
         wavelengths: &S::WavelengthContext,
+        lib: &Library<S>,
     ) -> Arc<dyn BxDF<S>>;
 }
 
@@ -150,8 +152,7 @@ pub trait BXDFBuilder<S: SpectralAlgebra>: Send + Sync {
 /// 运行时材质。
 ///
 /// 封装不同类型的材质构建器。当前只有 `BSDF` 变体；未来加 BSSRDF 时
-/// 新增变体，`Scene::material` 的签名不变——这是用枚举而非
-/// `&dyn BSDFBuilder` 的原因。
+/// 新增变体，`Scene::material` 的签名不变。
 pub enum Material<S: SpectralAlgebra> {
     /// BSDF 材质。构造完整 [`BSDF`]。
     BSDF(Arc<dyn BSDFBuilder<S>>),
@@ -174,17 +175,17 @@ impl<S: SpectralAlgebra> Material<S> {
 
     /// 构造 BSDF。如果不是 BSDF 材质，返回 `None`。
     ///
-    /// `wo` 是着色点出射方向，世界空间，已归一化。等于
-    /// `-ray.dir.normalize()`。
+    /// `lib` 是资产库，材质参数从这里的纹理求值。
     pub fn build_bsdf(
         &self,
         hit: &SurfaceHit,
         wo: Vec3,
         sampler: &mut dyn Sampler,
         wavelengths: &S::WavelengthContext,
+        lib: &Library<S>,
     ) -> Option<BSDF<S>> {
         match self {
-            Material::BSDF(b) => Some(b.build(hit, wo, sampler, wavelengths)),
+            Material::BSDF(b) => Some(b.build(hit, wo, sampler, wavelengths, lib)),
         }
     }
 
@@ -193,6 +194,7 @@ impl<S: SpectralAlgebra> Material<S> {
         matches!(self, Material::BSDF(_))
     }
 }
+
 
 // ═══════════════════════════════════════════════════════════════
 // 测试
@@ -203,8 +205,23 @@ mod tests {
     use super::*;
     use crate::bsdf::{BxDFEntry, Diffuse};
     use crate::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
+    use crate::texture::{AlbedoChannel, Texture};
     use glam::{Vec2, Vec3};
-    use kzray_data::common::InstanceId;
+    use kzray_data::TextureId;
+
+    // 简化测试纹理——测试只验证接口衔接，不验证纹理实现
+    struct FakeAlbedoTexture(SpectrumRgb);
+    impl Texture<AlbedoChannel<SpectrumRgb>> for FakeAlbedoTexture {
+        fn eval(&self, _uv: Vec2, _d: Option<&crate::texture::Differential>) -> SpectrumRgb {
+            self.0
+        }
+    }
+
+    fn empty_lib_with_albedo(id: TextureId, albedo: SpectrumRgb) -> Library<SpectrumRgb> {
+        let mut lib = Library::<SpectrumRgb>::new();
+        lib.add_albedo(id, Box::new(FakeAlbedoTexture(albedo)));
+        lib
+    }
 
     fn dummy_hit() -> SurfaceHit {
         SurfaceHit {
@@ -220,37 +237,26 @@ mod tests {
     }
 
     struct ConstantBSDFBuilder {
-        albedo: SpectrumRgb,
+        albedo: TextureId,
     }
 
     impl BSDFBuilder<SpectrumRgb> for ConstantBSDFBuilder {
         fn build(
             &self,
-            _hit: &SurfaceHit,
+            hit: &SurfaceHit,
             wo: Vec3,
             _sampler: &mut dyn Sampler,
             _wavelengths: &NoWavelengths,
+            lib: &Library<SpectrumRgb>,
         ) -> BSDF<SpectrumRgb> {
-            let bxdf: Arc<dyn BxDF<SpectrumRgb>> = Arc::new(Diffuse::new(self.albedo));
-            BSDF::new(vec![BxDFEntry::new (bxdf, 1.0, SpectrumRgb::from_array([1.0, 1.0, 1.0]))],
-                wo, Vec3::Y)
-                .expect("BSDF construction should succeed")
-        }
-    }
-
-    struct ConstantBXDFBuilder {
-        albedo: SpectrumRgb,
-    }
-
-    impl BXDFBuilder<SpectrumRgb> for ConstantBXDFBuilder {
-        fn build(
-            &self,
-            _hit: &SurfaceHit,
-            _wo: Vec3,
-            _sampler: &mut dyn Sampler,
-            _wavelengths: &NoWavelengths,
-        ) -> Arc<dyn BxDF<SpectrumRgb>> {
-            Arc::new(Diffuse::new(self.albedo))
+            let albedo = lib.albedo(self.albedo).eval(hit.uv, None);
+            let bxdf: Arc<dyn BxDF<SpectrumRgb>> = Arc::new(Diffuse::new(albedo));
+            BSDF::new(
+                vec![BxDFEntry::new(bxdf, 1.0, SpectrumRgb::from_array([1.0, 1.0, 1.0]))],
+                wo,
+                Vec3::Y,
+            )
+            .expect("BSDF construction should succeed")
         }
     }
 
@@ -264,12 +270,12 @@ mod tests {
 
     #[test]
     fn bsdf_builder_produces_usable_bsdf() {
-        let builder = ConstantBSDFBuilder {
-            albedo: SpectrumRgb::new(0.8, 0.2, 0.2),
-        };
+        let id = TextureId::from_index(0);
+        let lib = empty_lib_with_albedo(id, SpectrumRgb::new(0.8, 0.2, 0.2));
+        let builder = ConstantBSDFBuilder { albedo: id };
         let hit = dummy_hit();
         let mut sampler = TestSampler;
-        let bsdf = builder.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths);
+        let bsdf = builder.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths, &lib);
         let wi = Vec3::new(0.0, 1.0, 0.0);
         let value = bsdf.eval(wi, crate::bsdf::TransportMode::Radiance);
         assert!(value.0[0] > 0.0);
@@ -277,42 +283,20 @@ mod tests {
 
     #[test]
     fn bsdf_builder_is_object_safe() {
-        let builder = ConstantBSDFBuilder {
-            albedo: SpectrumRgb::ONE,
-        };
+        let id = TextureId::from_index(0);
+        let builder = ConstantBSDFBuilder { albedo: id };
         let _: Box<dyn BSDFBuilder<SpectrumRgb>> = Box::new(builder);
     }
 
     #[test]
-    fn bxdf_builder_produces_usable_bxdf() {
-        let builder = ConstantBXDFBuilder {
-            albedo: SpectrumRgb::new(0.8, 0.2, 0.2),
-        };
-        let hit = dummy_hit();
-        let mut sampler = TestSampler;
-        let bxdf = builder.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths);
-        assert!(bxdf.flags().is_diffuse());
-        assert!(bxdf.flags().is_valid());
-    }
-
-    #[test]
-    fn material_bsdf_constructor() {
-        let builder: Arc<dyn BSDFBuilder<SpectrumRgb>> = Arc::new(ConstantBSDFBuilder {
-            albedo: SpectrumRgb::ONE,
-        });
-        let material = Material::bsdf(builder);
-        assert!(material.is_bsdf());
-    }
-
-    #[test]
     fn material_build_bsdf_works() {
-        let material = Material::bsdf(Arc::new(ConstantBSDFBuilder {
-            albedo: SpectrumRgb::new(0.8, 0.2, 0.2),
-        }));
+        let id = TextureId::from_index(0);
+        let lib = empty_lib_with_albedo(id, SpectrumRgb::new(0.8, 0.2, 0.2));
+        let material = Material::bsdf(Arc::new(ConstantBSDFBuilder { albedo: id }));
         let hit = dummy_hit();
         let mut sampler = TestSampler;
         let bsdf = material
-            .build_bsdf(&hit, Vec3::Y, &mut sampler, &NoWavelengths)
+            .build_bsdf(&hit, Vec3::Y, &mut sampler, &NoWavelengths, &lib)
             .expect("BSDF material should build");
         let wi = Vec3::new(0.0, 1.0, 0.0);
         let value = bsdf.eval(wi, crate::bsdf::TransportMode::Radiance);

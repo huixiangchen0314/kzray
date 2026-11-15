@@ -9,3 +9,6 @@ pub mod integrator;
 pub mod render;
 pub mod util;
 pub mod accel;
+pub mod texture;
+
+pub use texture::{ConstantTexture, ImageTexture};

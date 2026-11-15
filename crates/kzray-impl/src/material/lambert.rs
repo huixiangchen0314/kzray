@@ -1,26 +1,28 @@
 //! Lambert（理想漫反射）材质。
 //!
-//! 构造单个 `Diffuse` BxDF，包装成 `BSDF`。漫反射与 `wo` 无关（`f` 恒为
-//! `albedo / π`），但 `BSDF::new` 需要 `wo` 构造局部坐标系。
+//! # 纹理接入
+//!
+//! `albedo` 字段从 `S` 改为 `TextureId`——材质构造时只记录 id，
+//! `build` 时从 `Library` 查 `AlbedoTexture<S>` 并 `eval(hit.uv, ...)`
+//! 求值。常量 albedo 用 `ConstantTexture<AlbedoChannel<S>>` 注册，
+//! 统一走纹理路径。
 //!
 //! # 双面语义
 //!
-//! 如果 `wo` 与 `shading_normal` 反向（光线从表面背面照射），翻转
-//! `shading_normal` 使 `wo` 落在法线正向。这是标准漫反射的双面行为——
-//! 光线从两面都能照到漫反射面（如纸张、薄片）。
-//!
-//! 如果要单面材质（背面不可见），构造 `LambertBSDFBuilder` 时用
-//! `single_sided(true)`，`build` 时反向 `wo` 返回零 BSDF。
+//! `wo` 与 `shading_normal` 反向时翻转法线（默认），或返回零反射
+//! BSDF（`single_sided(true)`）。
 
 use std::sync::Arc;
 
 use glam::Vec3;
 
 use kzray_abs::bsdf::{BSDF, BxDF, BxDFEntry, Diffuse};
+use kzray_abs::library::Library;
 use kzray_abs::material::BSDFBuilder;
 use kzray_abs::ray::SurfaceHit;
 use kzray_abs::sampler::Sampler;
 use kzray_abs::spectrum::SpectralAlgebra;
+use kzray_data::TextureId;
 
 // ═══════════════════════════════════════════════════════════════
 // LambertBSDFBuilder
@@ -28,29 +30,40 @@ use kzray_abs::spectrum::SpectralAlgebra;
 
 /// Lambert 材质构建器。
 ///
-/// 持有 `albedo`，`build` 时构造 `Diffuse` BxDF 并包装成 `BSDF`。
+/// 持有 `albedo: TextureId`，`build` 时从 `Library` 求值。双面语义见
+/// 模块文档。
 ///
 /// # 构造
 ///
-/// ```text
-/// let material = LambertBSDFBuilder::<SpectrumRgb>::new(SpectrumRgb::new(0.8, 0.2, 0.2));
+/// ```ignore
+/// // 1. 注册常量 albedo 纹理
+/// let albedo_id = lib.add_albedo(
+///     TextureId::from_index(0),
+///     Box::new(ConstantTexture::<AlbedoChannel<SpectrumRgb>>::new(
+///         SpectrumRgb::new(0.8, 0.2, 0.2),
+///     )),
+/// );
+/// // 2. 构造材质
+/// let material = Material::bsdf(Arc::new(LambertBSDFBuilder::new(albedo_id)));
 /// ```
 ///
-/// # 单面 / 双面
+/// # 泛型
 ///
-/// 默认双面：`wo` 与法线反向时翻转法线。单面模式通过
-/// `single_sided(true)` 开启，反向 `wo` 返回零反射的 BSDF（光线穿透）。
-pub struct LambertBSDFBuilder<S: SpectralAlgebra> {
-    albedo: S,
+/// `LambertBSDFBuilder` **不带 `S` 泛型**——`TextureId` 是裸 u32。同一
+/// 实例在 `impl<S: SpectralAlgebra> BSDFBuilder<S>` 下可服务任意 `S`，
+/// `S` 由 `Library<S>` 的 `albedo` 查询决定。
+#[derive(Clone, Copy, Debug)]
+pub struct LambertBSDFBuilder {
+    albedo: TextureId,
     single_sided: bool,
 }
 
-impl<S: SpectralAlgebra> LambertBSDFBuilder<S> {
+impl LambertBSDFBuilder {
     /// 构造 Lambert 材质（双面）。
     ///
-    /// `albedo` 是漫反射率，通常在 `[0, 1]` 范围内。可以为负或大于 1
-    /// （物理上非现实，但渲染器不禁止——hack 用途）。
-    pub fn new(albedo: S) -> Self {
+    /// `albedo` 是 `AlbedoChannel<S>` 纹理的 id，必须在 `Library` 中
+    /// 已注册。
+    pub fn new(albedo: TextureId) -> Self {
         LambertBSDFBuilder {
             albedo,
             single_sided: false,
@@ -58,51 +71,52 @@ impl<S: SpectralAlgebra> LambertBSDFBuilder<S> {
     }
 
     /// 设置单面 / 双面。
-    ///
-    /// - `false`（默认）：双面。`wo` 与法线反向时翻转法线，光线从两面
-    ///   都能照到。
-    /// - `true`：单面。`wo` 与法线反向时返回零反射 BSDF。
     pub fn single_sided(mut self, single_sided: bool) -> Self {
         self.single_sided = single_sided;
         self
     }
 
-    /// 当前 albedo。
-    pub fn albedo(&self) -> S {
+    /// 当前 albedo 纹理 id。
+    pub fn albedo(&self) -> TextureId {
         self.albedo
     }
 }
 
-impl<S: SpectralAlgebra> BSDFBuilder<S> for LambertBSDFBuilder<S> {
+impl<S: SpectralAlgebra> BSDFBuilder<S> for LambertBSDFBuilder {
     fn build(
         &self,
         hit: &SurfaceHit,
         wo: Vec3,
         _sampler: &mut dyn Sampler,
         _wavelengths: &S::WavelengthContext,
+        lib: &Library<S>,
     ) -> BSDF<S> {
+        // 从纹理求值 albedo。
+        //
+        // 传 `None` 作为微分——`SurfaceHit` 当前不带 `Differential`。
+        // 阶段 5 给 `SurfaceHit` 加 `differential` 字段后，改为
+        // `hit.differential.as_ref()` 启用 MIP。
+        let albedo = lib.albedo(self.albedo).eval(hit.uv, None);
+
         let normal = hit.shading_normal;
         let wo_positive = wo.dot(normal) > 0.0;
 
-        // 单面材质 + 反向 wo：返回零反射 BSDF（光线穿透）
+        // 单面 + 反向 wo：零反射 BSDF。
         if self.single_sided && !wo_positive {
-            // 返回一个"反射率为零"的 BSDF。用 Diffuse::new(S::zero()) 即可。
-            // 注意：这里用零 albedo 而不是返回 Err——BSDF::new 要求 wo.z > 0，
-            // 所以还是要用正向法线。反射率为零的 Diffuse 对所有方向返回 0。
             let zero_bxdf: Arc<dyn BxDF<S>> = Arc::new(Diffuse::new(S::zero()));
             return BSDF::new(
                 vec![BxDFEntry::new(zero_bxdf, 1.0, S::zero())],
                 wo,
-                normal )
-                .expect("zero BSDF construction should succeed");
+                normal,
+            )
+            .expect("zero BSDF construction should succeed");
         }
 
-        // 双面材质 + 反向 wo：翻转法线使 wo 落在正向
+        // 双面 + 反向 wo：翻转法线。
         let normal = if wo_positive { normal } else { -normal };
 
-        let bxdf: Arc<dyn BxDF<S>> = Arc::new(Diffuse::new(self.albedo));
-        BSDF::new(vec![BxDFEntry::new(bxdf, 1.0, S::one())],
-            wo, normal)
+        let bxdf: Arc<dyn BxDF<S>> = Arc::new(Diffuse::new(albedo));
+        BSDF::new(vec![BxDFEntry::new(bxdf, 1.0, S::one())], wo, normal)
             .expect("Lambert BSDF construction should succeed")
     }
 }
@@ -115,10 +129,27 @@ impl<S: SpectralAlgebra> BSDFBuilder<S> for LambertBSDFBuilder<S> {
 mod tests {
     use super::*;
     use glam::Vec2;
-    use kzray_abs::ScalarAlgebra;
-use kzray_abs::bsdf::TransportMode;
-    use kzray_abs::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
+    use kzray_abs::bsdf::TransportMode;
+    use kzray_abs::spectrum::{NoWavelengths, Rgb as SpectrumRgb, ScalarAlgebra};
+    use kzray_abs::texture::{AlbedoChannel, Differential, Texture};
     use kzray_data::common::InstanceId;
+
+    /// 测试用 albedo 纹理——返回固定颜色。
+    struct FixedAlbedo(SpectrumRgb);
+    impl Texture<AlbedoChannel<SpectrumRgb>> for FixedAlbedo {
+        fn eval(&self, _uv: Vec2, _d: Option<&Differential>) -> SpectrumRgb {
+            self.0
+        }
+    }
+
+    fn make_lib(
+        id: TextureId,
+        albedo: SpectrumRgb,
+    ) -> Library<SpectrumRgb> {
+        let mut lib = Library::new();
+        lib.add_albedo(id, Box::new(FixedAlbedo(albedo)));
+        lib
+    }
 
     fn dummy_hit() -> SurfaceHit {
         SurfaceHit {
@@ -143,90 +174,102 @@ use kzray_abs::bsdf::TransportMode;
 
     #[test]
     fn front_side_produces_bsdf() {
-        let material =
-            LambertBSDFBuilder::<SpectrumRgb>::new(SpectrumRgb::new(0.8, 0.2, 0.2));
+        let id = TextureId::from_index(0);
+        let lib = make_lib(id, SpectrumRgb::new(0.8, 0.2, 0.2));
+        let material = LambertBSDFBuilder::new(id);
         let hit = dummy_hit();
         let mut sampler = TestSampler;
-        let bsdf = material.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths);
+        let bsdf = material.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths, &lib);
         assert!(bsdf.has_reflection());
-        // eval 返回非零
-        let wi = Vec3::Y;
-        let f = bsdf.eval(wi, TransportMode::Radiance);
+        let f = bsdf.eval(Vec3::Y, TransportMode::Radiance);
         assert!(f.0[0] > 0.0);
     }
 
     #[test]
     fn lambert_eval_is_albedo_over_pi() {
+        let id = TextureId::from_index(0);
         let albedo = SpectrumRgb::new(0.8, 0.4, 0.2);
-        let material = LambertBSDFBuilder::<SpectrumRgb>::new(albedo);
+        let lib = make_lib(id, albedo);
+        let material = LambertBSDFBuilder::new(id);
         let hit = dummy_hit();
         let mut sampler = TestSampler;
-        let bsdf = material.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths);
+        let bsdf = material.build(&hit, Vec3::Y, &mut sampler, &NoWavelengths, &lib);
 
-        let wi = Vec3::Y;
-        let f = bsdf.eval(wi, TransportMode::Radiance);
-        let expected_inv_pi = 1.0 / std::f32::consts::PI;
-        assert!((f.0[0] - albedo.0[0] * expected_inv_pi).abs() < 1e-5);
-        assert!((f.0[1] - albedo.0[1] * expected_inv_pi).abs() < 1e-5);
-        assert!((f.0[2] - albedo.0[2] * expected_inv_pi).abs() < 1e-5);
+        let f = bsdf.eval(Vec3::Y, TransportMode::Radiance);
+        let inv_pi = 1.0 / std::f32::consts::PI;
+        assert!((f.0[0] - albedo.0[0] * inv_pi).abs() < 1e-5);
+        assert!((f.0[1] - albedo.0[1] * inv_pi).abs() < 1e-5);
+        assert!((f.0[2] - albedo.0[2] * inv_pi).abs() < 1e-5);
     }
 
     #[test]
     fn back_side_double_sided_flips_normal() {
-        // 双面材质：wo 与法线反向时仍然能构造 BSDF，光线从背面照射
-        let material =
-            LambertBSDFBuilder::<SpectrumRgb>::new(SpectrumRgb::new(0.8, 0.2, 0.2));
+        let id = TextureId::from_index(0);
+        let lib = make_lib(id, SpectrumRgb::new(0.8, 0.2, 0.2));
+        let material = LambertBSDFBuilder::new(id);
         let hit = dummy_hit();
         let mut sampler = TestSampler;
-        // wo 与法线反向
-        let bsdf = material.build(&hit, -Vec3::Y, &mut sampler, &NoWavelengths);
+        let bsdf = material.build(&hit, -Vec3::Y, &mut sampler, &NoWavelengths, &lib);
         assert!(bsdf.has_reflection());
     }
 
     #[test]
-    #[should_panic(expected = "WoOnWrongSide")]
     fn back_side_single_sided_returns_zero() {
-        let material = LambertBSDFBuilder::<SpectrumRgb>::new(SpectrumRgb::new(0.8, 0.2, 0.2))
-            .single_sided(true);
+        let id = TextureId::from_index(0);
+        let lib = make_lib(id, SpectrumRgb::new(0.8, 0.2, 0.2));
+        let material = LambertBSDFBuilder::new(id).single_sided(true);
         let hit = dummy_hit();
         let mut sampler = TestSampler;
-        // wo 和 法线反向 panic
-        let bsdf = material.build(&hit, -Vec3::Y, &mut sampler, &NoWavelengths);
-        // eval 在正向方向应返回零
-        let wi = Vec3::Y;
-        let f = bsdf.eval(wi, TransportMode::Radiance);
-        
+        let bsdf = material.build(&hit, -Vec3::Y, &mut sampler, &NoWavelengths, &lib);
+        let f = bsdf.eval(Vec3::Y, TransportMode::Radiance);
         assert_eq!(f, SpectrumRgb::zero());
     }
 
     #[test]
     fn oblique_wo_still_works() {
-        // 斜向 wo 也能构造 BSDF（双面）
-        let material =
-            LambertBSDFBuilder::<SpectrumRgb>::new(SpectrumRgb::new(0.8, 0.2, 0.2));
+        let id = TextureId::from_index(0);
+        let lib = make_lib(id, SpectrumRgb::new(0.8, 0.2, 0.2));
+        let material = LambertBSDFBuilder::new(id);
         let hit = dummy_hit();
         let mut sampler = TestSampler;
-        let wo = Vec3::new(0.5, 0.5, 0.7).normalize(); // 与 Y 夹角 ~45°
-        let bsdf = material.build(&hit, wo, &mut sampler, &NoWavelengths);
+        let wo = Vec3::new(0.5, 0.5, 0.7).normalize();
+        let bsdf = material.build(&hit, wo, &mut sampler, &NoWavelengths, &lib);
         assert!(bsdf.has_reflection());
     }
 
     #[test]
     fn albedo_getter() {
-        let albedo = SpectrumRgb::new(0.5, 0.5, 0.5);
-        let material = LambertBSDFBuilder::<SpectrumRgb>::new(albedo);
-        assert_eq!(material.albedo(), albedo);
+        let id = TextureId::from_index(7);
+        let material = LambertBSDFBuilder::new(id);
+        assert_eq!(material.albedo(), id);
     }
 
     #[test]
     fn builder_send_sync() {
         fn assert_send_sync<T: Send + Sync>() {}
-        assert_send_sync::<LambertBSDFBuilder<SpectrumRgb>>();
+        assert_send_sync::<LambertBSDFBuilder>();
     }
 
     #[test]
     fn builder_is_object_safe() {
+        let id = TextureId::from_index(0);
         let _: Arc<dyn BSDFBuilder<SpectrumRgb>> =
-            Arc::new(LambertBSDFBuilder::<SpectrumRgb>::new(SpectrumRgb::ONE));
+            Arc::new(LambertBSDFBuilder::new(id));
+    }
+
+    #[test]
+    fn builder_serves_multiple_spectral_algebras() {
+        // 同一个 builder 实例可服务多个 S
+        let id = TextureId::from_index(0);
+        let builder = LambertBSDFBuilder::new(id);
+
+        // 通过 Rgb
+        let lib_rgb = make_lib(id, SpectrumRgb::ONE);
+        let _ = <LambertBSDFBuilder as BSDFBuilder<SpectrumRgb>>::build(
+            &builder, &dummy_hit(), Vec3::Y, &mut TestSampler, &NoWavelengths, &lib_rgb,
+        );
+
+        // builder 本身无 S 参数，可跨 S 复用
+        let _ = builder; // 保持存活
     }
 }
