@@ -54,11 +54,18 @@ pub trait ScalarAlgebra: Copy + Send + Sync + 'static {
     /// 标量乘，与 `add` / `mul` 满足分配律。
     fn scale(&self, k: Self::Scalar) -> Self;
 
-    /// 分量绝对值的最大值。用于早退优化：`self.max_abs() < eps`。
+   /// 分量绝对值的最大值，返回 `f32`。
     ///
-    /// 非范数、非公理、非代数结构的一部分。比较所需的 `PartialOrd`
-    /// 由调用方在泛型 bound 中自行添加。
-    fn max_abs(&self) -> Self::Scalar;
+    /// 非范数、非公理、非代数结构的一部分。用于**运行时控制流**——
+    /// RR 存活概率、早退优化。这些场景需要与 `f32` 阈值比较、需要
+    /// 转 `f32` 做概率采样，`Self::Scalar` 的 `Copy + From<f32>` 不够。
+    ///
+    /// 返回 `f32` 而非 `Self::Scalar`：消费者只有 `f32` 需求，且所有
+    /// 实现（`f32` / `Rgb` / `Spectrum`）内部本来就算出 `f32`。
+    /// 让 `Self::Scalar` 只为 `scale` 服务，`max_abs` 独立为 `f32`，
+    /// 避免给 `Self::Scalar` 加一堆只为 `max_abs` 用的 bound。
+    /// 这是合理的工程简化
+    fn max_abs(&self) -> f32;
 
     /// 由 `add` + `neg` 导出，非公理，仅为调用便利。
     fn sub(&self, other: &Self) -> Self {

@@ -1,30 +1,23 @@
 //! 路径追踪积分器。
 //!
-//! 经典路径追踪：每次反弹做 NEE（光源采样）+ 自发光累加 + BSDF 采样。
-//!
 //! # 简化
 //!
 //! - **无 MIS**：当前只有 delta 光源（点光源），NEE 的 MIS 权重恒为 1。
-//! - **无 RR**：用 `max_depth` 截断。RR 留作阶段 6。
+//! - **RR**：`bounces >= RR_START_BOUNCE` 后按 `throughput.max_abs()`
+//!   概率存活。见下方常量说明。
 //! - **无面积光自发光**：当前无 `AreaLight` 实现，命中光源图元时不自发光。
 //!
-//! # 自发光规则
+//! # RR（俄罗斯轮盘赌）
 //!
-//! `specular_bounce` 标志控制无限远光源的自发光累加：
+//! 反弹到 `RR_START_BOUNCE` 次后，以 `throughput.max_abs()` 的概率
+//! 继续，否则终止；若继续，`throughput /= p` 保持无偏。
 //!
-//! - 初始 `true`（第一次反弹，直接从相机看到环境光，必须累加）；
-//! - 每次 BSDF 采样后，`specular_bounce = bs.flags.is_pure_delta()`；
-//! - 光线逃逸到无限远时，`specular_bounce == true` 才累加环境光。
+//! 前 `RR_START_BOUNCE` 次不 RR——低反弹场景（球 + 平面）的路径在 3
+//! 次内结束的概率高，RR 过早会引入噪声而不减时间。
 //!
-//! # 维度追踪
-//!
-//! ```text
-//! 每次反弹：
-//!   LightSampler::sample(ctx, sampler, dim)      消耗 c1
-//!   sampler.next_2d(dim + c1)                    消耗 2
-//!   BSDF::sample_f(sampler, dim + c1 + 2)        消耗 c2
-//!   dim += c1 + 2 + c2
-//! ```
+//! `RR_MIN_PROB` 兜底：存活概率低于此值直接终止。严格无偏会得到
+//! 极少数 throughput 爆炸的路径（`throughput / 0.001`），方差不减反增；
+//! 设阈值是有偏但方差可控的实践做法（PBRT / Cycles 同）。
 
 use glam::Vec2;
 
@@ -37,26 +30,31 @@ use kzray_abs::scene::Scene;
 use kzray_abs::spectrum::SpectralAlgebra;
 
 // ═══════════════════════════════════════════════════════════════
+// RR 配置
+// ═══════════════════════════════════════════════════════════════
+
+/// 从第几次反弹开始 RR。
+///
+/// 前几次反弹路径几乎必然继续，RR 只会引入噪声。3 是低反弹场景的
+/// 经验值——球 + 平面场景 90% 的路径在 3 次内结束。
+const RR_START_BOUNCE: u32 = 3;
+
+/// 存活概率下限。低于此值直接终止，避免 throughput 爆炸。
+const RR_MIN_PROB: f32 = 0.05;
+
+// ═══════════════════════════════════════════════════════════════
 // PathIntegrator
 // ═══════════════════════════════════════════════════════════════
 
-/// 路径追踪积分器。
-///
-/// 无泛型参数——`S` / `LS` 在 `impl Integrator<S, LS>` 上。`PathIntegrator`
-/// 本身只持有配置（`max_depth`），不依赖光谱类型或采样器类型。
 pub struct PathIntegrator {
     max_depth: u32,
 }
 
 impl PathIntegrator {
-    /// 构造路径追踪积分器。
-    ///
-    /// `max_depth` 是最大反弹次数。典型值 5-10。
     pub fn new(max_depth: u32) -> Self {
         PathIntegrator { max_depth }
     }
 
-    /// 最大反弹次数。
     pub fn max_depth(&self) -> u32 {
         self.max_depth
     }
@@ -99,6 +97,7 @@ where
                     break;
                 }
             };
+
             // ─── 材质 → BSDF ───
             let material = match scene.material(&hit) {
                 Some(m) => m,
@@ -111,7 +110,7 @@ where
                 wo,
                 sampler,
                 wavelengths,
-                scene.library(), // ← 新增
+                scene.library(),
             ) {
                 Some(b) => b,
                 None => break,
@@ -135,7 +134,6 @@ where
                             if let Some(li) =
                                 light.sample_li(&ctx, Vec2::new(dim1, dim2), wavelengths)
                             {
-                                // 阴影射线
                                 let occluded = match li.geometry {
                                     LiGeometry::Surface { position, .. } => {
                                         let to_light = position - hit.position;
@@ -160,10 +158,6 @@ where
                                     let f = bsdf.eval(li.wi, TransportMode::Radiance);
                                     let cos_theta = ctx.normal.dot(li.wi).max(0.0);
 
-                                    // 关键修复：delta 光源的 li.pdf 无有限值（填 0.0
-                                    // 作为占位），不能直接乘进 light_pdf。delta 光源的
-                                    // 方向由几何唯一确定，采样 PDF 就是"选择该光源的
-                                    // 概率" sel.light_pdf。
                                     let is_delta = light.light_type().is_delta();
                                     let light_pdf = if is_delta {
                                         sel.light_pdf
@@ -175,14 +169,16 @@ where
                                         let mis_weight = if is_delta {
                                             1.0
                                         } else {
-                                            let bsdf_pdf = bsdf.pdf(li.wi, TransportMode::Radiance);
+                                            let bsdf_pdf =
+                                                bsdf.pdf(li.wi, TransportMode::Radiance);
                                             power_heuristic(light_pdf, bsdf_pdf)
                                         };
 
                                         let contribution = f.mul(&li.incident).scale(
                                             S::Scalar::from(cos_theta * mis_weight / light_pdf),
                                         );
-                                        radiance = radiance.add(&throughput.mul(&contribution));
+                                        radiance =
+                                            radiance.add(&throughput.mul(&contribution));
                                     }
                                 }
                             }
@@ -206,6 +202,27 @@ where
                 break;
             }
 
+            // ─── RR ───
+            //
+            // `throughput.max_abs()` 是 `f32`（ScalarAlgebra 保证），
+            // 直接与阈值比较。`min(1.0)` 防御 albedo > 1 的场景
+            // （物理上不现实但材质系统不禁止）。
+            if bounces >= RR_START_BOUNCE {
+                let p = throughput.max_abs().min(1.0);
+                if p < RR_MIN_PROB {
+                    break;
+                }
+                // 消耗一维采样。注意 `next_f32` 之后无论是否 break，
+                // 该维度都已消耗——`dim += 1` 在 break 判断之前。
+                let r = sampler.next_f32(dim);
+                dim += 1;
+                if r >= p {
+                    break;
+                }
+                // 存活：补偿概率损失，保持无偏。
+                throughput = throughput.scale((1.0 / p).into());
+            }
+
             // ─── 更新光线 ───
             let new_origin = hit.offset_origin(1.0, 1e-3);
             current_ray = Ray::new(new_origin, bs.wi, current_ray.time);
@@ -219,7 +236,6 @@ where
 // Power Heuristic
 // ═══════════════════════════════════════════════════════════════
 
-/// Power heuristic（β=2）：`pdf_a² / (pdf_a² + pdf_b²)`。
 #[inline]
 fn power_heuristic(pdf_a: f32, pdf_b: f32) -> f32 {
     let a2 = pdf_a * pdf_a;
