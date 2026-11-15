@@ -60,7 +60,7 @@ impl<S: SpectralAlgebra> Light<S> for PointLight<S> {
 
     fn sample_li(
         &self,
-        ctx: &LightSampleContext,
+        ctx: &LightSampleContext<'_, S>,
         _sample: Vec2,
         _wavelengths: &S::WavelengthContext,
     ) -> Option<LiSample<S>> {
@@ -88,7 +88,7 @@ impl<S: SpectralAlgebra> Light<S> for PointLight<S> {
         })
     }
 
-    fn pdf_li(&self, _ctx: &LightSampleContext, _wi: Vec3) -> f32 {
+    fn pdf_li(&self, _ctx: &LightSampleContext<'_, S>, _wi: Vec3) -> f32 {
         // delta：连续方向采样采不到
         0.0
     }

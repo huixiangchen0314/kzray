@@ -28,7 +28,7 @@ use kzray_abs::spectrum::{NoWavelengths, Rgb as SpectrumRgb};
 use kzray_data::TextureId;
 use kzray_data::common::LightId;
 use kzray_impl::texture::image::Wrap;
-use kzray_impl::{ConstantTexture, ImageTexture};
+use kzray_impl::ImageTexture;
 use kzray_math::filter::BoxFilter;
 
 use kzray_impl::camera::pinhole::{PinholeCamera, PinholeCameraConfig};

@@ -11,7 +11,7 @@ use std::ops::Range;
 
 use kzray_abs::ray::Ray;
 
-use crate::geometry::{RayA, ShapeA, ShapeHit};
+use crate::geometry::{RayA, ShapeA, ShapeHit, shape::AreaSample};
 
 // ═══════════════════════════════════════════════════════════════
 // Triangle —— 表示层
@@ -226,6 +226,34 @@ impl ShapeA for TriangleA {
     fn occluded(&self, ray: &RayA, t_range: Range<f32>) -> bool {
         intersect_triangle_occluded(self.v0, self.v1, self.v2, ray, t_range, false)
     }
+
+    fn sample_area(&self, u: Vec2) -> Option<AreaSample> {
+        // 重心坐标均匀采样：u ∈ [0,1)² 映射到三角形内。
+        //
+        // 标准方法：sqrt 重参数化使面积均匀。
+        let su = u.x.sqrt();
+        let b0 = 1.0 - su;
+        let b1 = u.y * su;
+        let b2 = su - b1; // = su * (1 - u.y)
+
+        let p = self.v0 * b0 + self.v1 * b1 + self.v2 * b2;
+
+        // 法线与面积
+        let edge1 = self.v1 - self.v0;
+        let edge2 = self.v2 - self.v0;
+        let cross = edge1.cross(edge2);
+        let area = cross.length() * 0.5;
+        if area <= 0.0 {
+            return None; // 退化三角形
+        }
+        let normal = cross / (area * 2.0);
+
+        Some(AreaSample {
+            position: p,
+            normal,
+            pdf_area: 1.0 / area,
+        })
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -235,14 +263,22 @@ impl ShapeA for TriangleA {
 impl From<Triangle> for TriangleA {
     #[inline]
     fn from(t: Triangle) -> Self {
-        TriangleA { v0: t.v0.into(), v1: t.v1.into(), v2: t.v2.into() }
+        TriangleA {
+            v0: t.v0.into(),
+            v1: t.v1.into(),
+            v2: t.v2.into(),
+        }
     }
 }
 
 impl From<TriangleA> for Triangle {
     #[inline]
     fn from(t: TriangleA) -> Self {
-        Triangle { v0: t.v0.into(), v1: t.v1.into(), v2: t.v2.into() }
+        Triangle {
+            v0: t.v0.into(),
+            v1: t.v1.into(),
+            v2: t.v2.into(),
+        }
     }
 }
 
@@ -422,7 +458,6 @@ mod tests {
     }
 }
 
-
 /// Möller–Trumbore 遮挡查询（自由函数，mesh 复用）。
 ///
 /// 判别部分通过即 `true`，不算法线/位置/distance。`cull_backface` 语义
@@ -465,7 +500,6 @@ pub fn intersect_triangle_occluded(
     t >= t_range.start && t < t_range.end
 }
 
-
 /// 三角形经仿射变换后的**世界空间** AABB。
 ///
 /// 直接变换 3 个顶点取 min/max——三角形是平面图元，变换 3 点即得
@@ -475,7 +509,5 @@ pub fn triangle_aabb_transformed(tri: &TriangleA, transform: &Affine3A) -> Aabb 
     let v1 = transform.transform_point3(Vec3::from(tri.v1));
     let v2 = transform.transform_point3(Vec3::from(tri.v2));
 
-    Aabb::from_point(v0)
-        .union_point(v1)
-        .union_point(v2)
+    Aabb::from_point(v0).union_point(v1).union_point(v2)
 }

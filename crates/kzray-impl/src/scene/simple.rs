@@ -8,15 +8,15 @@ use std::ops::Range;
 
 use glam::Affine3A;
 
-use kzray_abs::Library;
 use kzray_abs::light::{InfiniteLight, Light, LightSampler};
 use kzray_abs::material::Material;
 use kzray_abs::ray::{Ray, SurfaceHit};
 use kzray_abs::scene::Scene;
 use kzray_abs::spectrum::SpectralAlgebra;
-use kzray_data::TextureId;
+use kzray_abs::Library;
 use kzray_data::common::{InstanceId, LightId};
 use kzray_data::geometry::Aabb;
+use kzray_data::TextureId;
 
 use crate::accel::instance::ShapeInstance;
 use crate::accel::{Accelerator, BruteForce, Hit, InstanceHit, Primitive};
@@ -174,7 +174,8 @@ where
         if let Some(a) = alpha {
             instance = instance.with_alpha(a);
         }
-        self.primitives.push(Primitive::Instance { shape: instance });
+        self.primitives
+            .push(Primitive::Instance { shape: instance });
         self.materials.push(material);
         id
     }
@@ -208,6 +209,8 @@ where
         self
     }
 
+  
+  
     pub fn build(self) -> SimpleScene<S, LS, L, IL> {
         let bounds = if let Some(b) = self.explicit_bounds {
             b

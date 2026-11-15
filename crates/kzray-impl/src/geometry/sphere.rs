@@ -7,9 +7,10 @@ use std::ops::Range;
 
 use kzray_abs::ray::Ray;
 
-use crate::geometry::ShapeHit;
 use crate::geometry::RayA;
 use crate::geometry::ShapeA;
+use crate::geometry::ShapeHit;
+use crate::geometry::shape::AreaSample;
 
 /// 球体（**运行时光几何表示**）。
 ///
@@ -91,21 +92,20 @@ impl ShapeA for SphereA {
         let half_b = oc.dot(ray.dir);
         let c = oc.length_squared() - self.radius * self.radius;
         let discriminant = half_b * half_b - a * c;
-        
+
         if discriminant < 0.0 {
             return false;
         }
-        
+
         let sqrt_disc = discriminant.sqrt();
         let inv_a = 1.0 / a;
         let t0 = (-half_b - sqrt_disc) * inv_a;
         let t1 = (-half_b + sqrt_disc) * inv_a;
-        
+
         // 任意根落在区间内即命中。不选最近、不算 distance。
-        (t0 >= t_range.start && t0 < t_range.end)
-            || (t1 >= t_range.start && t1 < t_range.end)
+        (t0 >= t_range.start && t0 < t_range.end) || (t1 >= t_range.start && t1 < t_range.end)
     }
-    
+
     /// 光线与球求交。
     ///
     /// 收 `&RayA`——调用方应在 trace 入口把 `Ray` 转成 `RayA` 一次，
@@ -143,8 +143,8 @@ impl ShapeA for SphereA {
 
         // ── 热点内部全程 Vec3A，只算一次 local ──
         // 球面点的归一化局部坐标即为单位几何法线，二者合并计算。
-        let position_a = ray.at(t);                              // Vec3A
-        let local = (position_a - self.center) / self.radius;    // 单位法线
+        let position_a = ray.at(t); // Vec3A
+        let local = (position_a - self.center) / self.radius; // 单位法线
         let uv = Self::uv_from_local(local);
         // 复用 a = |dir|²，避免二次 length()（length() 内部会再 sqrt）
         let distance = t * a.sqrt();
@@ -158,6 +158,26 @@ impl ShapeA for SphereA {
             uv,
         })
     }
+
+    fn sample_area(&self, u: Vec2) -> Option<AreaSample> {
+        // 球面均匀采样：z = 1 - 2u.x（cos θ），φ = 2π u.y。
+        //
+        // 注意：sphere 的 center/radius 已是世界空间。
+        let cos_theta = 1.0 - 2.0 * u.x;
+        let sin_theta = (1.0 - cos_theta * cos_theta).max(0.0).sqrt();
+        let phi = 2.0 * std::f32::consts::PI * u.y;
+
+        let normal = Vec3A::new(sin_theta * phi.cos(), cos_theta, sin_theta * phi.sin());
+        let position = self.center + normal * self.radius;
+
+        let area = 4.0 * std::f32::consts::PI * self.radius * self.radius;
+
+        Some(AreaSample {
+            position,
+            normal,
+            pdf_area: 1.0 / area,
+        })
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -167,14 +187,20 @@ impl ShapeA for SphereA {
 impl From<Sphere> for SphereA {
     #[inline]
     fn from(s: Sphere) -> Self {
-        SphereA { center: s.center.into(), radius: s.radius }
+        SphereA {
+            center: s.center.into(),
+            radius: s.radius,
+        }
     }
 }
 
 impl From<SphereA> for Sphere {
     #[inline]
     fn from(s: SphereA) -> Self {
-        Sphere { center: s.center.into(), radius: s.radius }
+        Sphere {
+            center: s.center.into(),
+            radius: s.radius,
+        }
     }
 }
 
@@ -341,7 +367,6 @@ mod tests {
     }
 }
 
-
 /// 球体经仿射变换后的**世界空间** AABB。
 ///
 /// 不走"局部 AABB → 8 角点变换"路径。球在任意仿射变换下变椭球，
@@ -354,9 +379,12 @@ pub fn sphere_aabb_transformed(sphere: &SphereA, transform: &Affine3A) -> Aabb {
     let r = sphere.radius;
 
     // glam Mat3 列主序：第 i 行元素 = (x_axis[i], y_axis[i], z_axis[i])
-    let rx = (m.x_axis.x * m.x_axis.x + m.y_axis.x * m.y_axis.x + m.z_axis.x * m.z_axis.x).sqrt() * r;
-    let ry = (m.x_axis.y * m.x_axis.y + m.y_axis.y * m.y_axis.y + m.z_axis.y * m.z_axis.y).sqrt() * r;
-    let rz = (m.x_axis.z * m.x_axis.z + m.y_axis.z * m.y_axis.z + m.z_axis.z * m.z_axis.z).sqrt() * r;
+    let rx =
+        (m.x_axis.x * m.x_axis.x + m.y_axis.x * m.y_axis.x + m.z_axis.x * m.z_axis.x).sqrt() * r;
+    let ry =
+        (m.x_axis.y * m.x_axis.y + m.y_axis.y * m.y_axis.y + m.z_axis.y * m.z_axis.y).sqrt() * r;
+    let rz =
+        (m.x_axis.z * m.x_axis.z + m.y_axis.z * m.y_axis.z + m.z_axis.z * m.z_axis.z).sqrt() * r;
 
     let extent = Vec3::new(rx, ry, rz);
     Aabb::new(center - extent, center + extent)

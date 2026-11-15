@@ -1,17 +1,18 @@
 
+use std::ops::Range;
+
+
 pub mod plane;
 pub mod sphere;
 pub mod shape;
 pub mod raya;
 pub mod triangle;
 
-use std::ops::Range;
-
-use glam::Affine3A;
+use glam::{Affine3A, Vec2};
 use kzray_data::Aabb;
 pub use plane::{Plane, PlaneA};
 pub use sphere::{Sphere, SphereA};
-pub use shape::{ShapeA, ShapeHit};
+pub use shape::{ShapeA, ShapeHit, AreaSample};
 pub use triangle::{Triangle, TriangleA, TriangleHit};
 pub use raya::RayA;
 
@@ -42,6 +43,21 @@ impl AnyShapeA {
             Self::Triangle(t) => triangle::triangle_aabb_transformed(t, transform),
         }
     }
+
+    /// 表面积。`Plane` 无界返回 `None`。
+    ///
+    /// 构建期调用（`ShapeAreaLight::phi`），不在热点路径。
+    pub fn surface_area(&self) -> Option<f32> {
+        match self {
+            Self::Sphere(s) => Some(4.0 * std::f32::consts::PI * s.radius * s.radius),
+            Self::Plane(_) => None,
+            Self::Triangle(t) => {
+                let e1 = t.v1 - t.v0;
+                let e2 = t.v2 - t.v0;
+                Some(e1.cross(e2).length() * 0.5)
+            }
+        }
+    }
 }
 
 impl ShapeA for AnyShapeA{
@@ -60,6 +76,14 @@ impl ShapeA for AnyShapeA{
             Self::Sphere(s) => s.occluded(ray, t_range),
             Self::Plane(p) => p.occluded(ray, t_range),
             Self::Triangle(t) => t.occluded(ray, t_range),
+        }
+    }
+
+    fn sample_area(&self, u: Vec2) -> Option<AreaSample> {
+        match self {
+            Self::Sphere(s) => s.sample_area(u),
+            Self::Plane(p) => p.sample_area(u),   // 返回 None
+            Self::Triangle(t) => t.sample_area(u),
         }
     }
 }

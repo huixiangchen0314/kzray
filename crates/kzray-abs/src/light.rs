@@ -1,4 +1,4 @@
-use crate::ray::Ray;
+use crate::{Library, ray::Ray};
 use crate::sampler::Sampler;
 use crate::spectrum::SpectralAlgebra;
 use glam::{Vec2, Vec3};
@@ -35,14 +35,30 @@ impl LightType {
 // 着色点上下文
 // ═══════════════════════════════════════════════════════════════
 
-/// 着色点上下文，传给光源采样。
-#[derive(Clone, Copy, Debug)]
-pub struct LightSampleContext {
-    /// 着色点世界坐标。
+/// 光源采样上下文。
+///
+/// 携带采样光源时需要的**所有可能用得上的信息**——位置、法线、
+/// 资产库。实现按需读取：
+///
+/// - `PointLight` / `ShapeAreaLight`：只用 `position` / `normal`，
+///   忽略 `library`；
+/// - 未来 `MeshAreaLight`：从 `library.expect_mesh(mesh_id)` 取顶点。
+///
+/// 把 `library` 放这里而非方法参数，是为了**接口稳定性**——
+/// 未来新增 `MeshAreaLight` 不改 `Light::sample_li` 签名。
+///
+/// # 生命周期
+///
+/// `'a` 是 `Library<S>` 的借用生命周期，与 `Scene` 一致。`Copy`
+/// 保留——`&'a Library<S>` 是 `Copy`，整个结构仍是 `Copy`。
+#[derive(Clone, Copy)]
+pub struct LightSampleContext<'a, S: SpectralAlgebra> {
+    /// 着色点位置（世界空间）。
     pub position: Vec3,
-    /// 着色点着色法线。
+    /// 着色点法线（世界空间，单位向量）。
     pub normal: Vec3,
-    // TODO(ray-or-context): 介质信息是否放这里，留给未来决断。
+    /// 资产库。当前所有实现可忽略；未来 mesh 面积光从这里取 mesh。
+    pub library: &'a Library<S>,
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -51,7 +67,7 @@ pub struct LightSampleContext {
 
 /// `LiSample` 使用的几何形态。
 ///
-/// 区分“有具体光源点”和“只有方向”，避免无限远光源的采样结果被误用于
+/// 区分"有具体光源点"和"只有方向"，避免无限远光源的采样结果被误用于
 /// 阴影射线或面积↔立体角测度转换。
 #[derive(Clone, Copy, Debug)]
 pub enum LiGeometry {
@@ -75,8 +91,8 @@ pub enum LiGeometry {
 /// `LeSample` 使用的几何形态。
 ///
 /// 光源侧采样点可能是具体表面点（面光源 / 点光源），也可能只有方向
-/// （无限远光源）。与 [`LiGeometry`] 的区别：光源侧没有“到着色点的
-/// 距离”参照点，但需要表面法线与 UV，供 BDPT 继续 trace 或做端点连接。
+/// （无限远光源）。与 [`LiGeometry`] 的区别：光源侧没有"到着色点的
+/// 距离"参照点，但需要表面法线与 UV，供 BDPT 继续 trace 或做端点连接。
 #[derive(Clone, Copy, Debug)]
 pub enum LeGeometry {
     /// 面光源 / 点光源：有具体光源表面点。
@@ -113,7 +129,7 @@ pub enum LeGeometry {
 /// - `wi` 对应 `ω_i`，从着色点指向光源点的单位入射方向。保留渲染方程
 ///   符号的 ASCII 转写，与 `pdf_li(ctx, wi)` 参数、文档 `ω_i` 三处一致。
 /// - `pdf` 是光源内部采样该入射方向的概率密度（**立体角测度**），不包含
-///   “选择该光源”的概率；总 PDF 由调用方把 `light_pdf * pdf` 得到。
+///   "选择该光源"的概率；总 PDF 由调用方把 `light_pdf * pdf` 得到。
 /// - `geometry` 是光源一侧的采样几何，用于阴影射线、可见性判断，
 ///   以及面积测度到立体角测度的转换；无限远光源为
 ///   [`LiGeometry::Direction`]。
@@ -188,7 +204,7 @@ pub enum LeGeometry {
 /// ```
 ///
 /// 如果是 delta 光源（`light_type().is_delta() == true`），`pdf_li`
-/// 无有限值，不参与 MIS。调用方直接用“采样命中”的贡献：
+/// 无有限值，不参与 MIS。调用方直接用"采样命中"的贡献：
 ///
 /// ```text
 /// let li = light.sample_li(&ctx, sample_2d, wl)?;
@@ -206,7 +222,7 @@ pub enum LeGeometry {
 /// - **`cos` 的归属不同**：`BxDFSample` 的 `cos` 是 BSDF 半球积分的
 ///   固有部分，BSDF 自己知道 `wi` 与法线的关系；`LiSample` 的
 ///   `cos_theta_i` 是**着色点**的几何项，光源不知道着色点法线朝哪，
-///   塞进 `LiSample` 会让“光源采样”和“着色点几何”耦合。
+///   塞进 `LiSample` 会让"光源采样"和"着色点几何"耦合。
 /// - **MIS 需要分别访问**：光源采样与 BSDF 采样的 MIS 权重计算需要
 ///   `pdf` 和 `incident` 的独立值；提前乘成 `weight` 会丢失可分解性。
 #[derive(Clone, Copy, Debug)]
@@ -252,7 +268,7 @@ pub struct LiSample<S> {
 ///   `Importance`（从光源射向场景）；
 /// - `BxDF` 方法全部显式接收 `TransportMode`。
 ///
-/// 光源侧不需要 `mode`，因为“光源发射什么”是物理量，与“从哪边看”
+/// 光源侧不需要 `mode`，因为"光源发射什么"是物理量，与"从哪边看"
 /// 无关。BDPT 连接两端时，光源侧用 `Importance`，相机侧用 `Radiance`，
 /// 中间通过 BSDF 的 `mode` 参数切换。
 ///
@@ -282,8 +298,8 @@ pub struct LeSample<S> {
     ///   反向（即 `-ray.direction`）。
     ///
     /// 两者反向的原因是光源侧采样和着色点侧求值的参考点不同：
-    /// `emitted_radiance` 以着色点为原点问“朝这个方向看到什么”，
-    /// `sample_le` 以光源为原点问“光源朝这个方向发射什么”。
+    /// `emitted_radiance` 以着色点为原点问"朝这个方向看到什么"，
+    /// `sample_le` 以光源为原点问"光源朝这个方向发射什么"。
     ///
     /// 该方向无对应渲染方程符号（方程中 `ω_o` 是着色点出射方向），
     /// 因此使用工程化名称 `direction` 而非符号转写。
@@ -302,12 +318,12 @@ pub struct LeSample<S> {
 
 /// 所有光源共享的采样契约。
 ///
-/// `LightSampler` 只负责“在多个光源之间选一个”；本 trait 负责
-/// “给定一个光源，采样它的点/方向、计算 PDF、给出总功率”。
+/// `LightSampler` 只负责"在多个光源之间选一个"；本 trait 负责
+/// "给定一个光源，采样它的点/方向、计算 PDF、给出总功率"。
 ///
 /// 面光源求值见 [`AreaLight::emitted_radiance`]，无限远光源求值与
 /// 光源侧采样（`sample_le` / `pdf_le` / `emitted_radiance`）见
-/// [`InfiniteLight`]。拆分 trait 的目的是让“不适用的能力”在类型层面
+/// [`InfiniteLight`]。拆分 trait 的目的是让"不适用的能力"在类型层面
 /// 不存在，而不是用 `S::zero()` 或 `unreachable!()` 兜底。具体某个
 /// `Light` 实例具备哪些能力，由实现层自行枚举分派，抽象层不做类型枚举。
 ///
@@ -355,7 +371,7 @@ pub trait Light<S: SpectralAlgebra>: Send + Sync {
     ///
     /// 返回 `None` 表示采样失败（如方向在表面背面、距离退化、样本无效）。
     ///
-    /// `pdf` 字段是光源内部采样 PDF，立体角测度，不包含“选择该光源”
+    /// `pdf` 字段是光源内部采样 PDF，立体角测度，不包含"选择该光源"
     /// 的概率；delta 光源的 `pdf` 无意义，调用方应根据
     /// [`LightType::is_delta`] 决定是否使用。
     ///
@@ -377,9 +393,15 @@ pub trait Light<S: SpectralAlgebra>: Send + Sync {
     /// [`LiGeometry::Direction`]，且 `incident` / `pdf` 必须与
     /// [`InfiniteLight::sample_le`] 在同一方向上一致；推荐直接复用
     /// [`InfiniteLight::sample_li_via_le`] 保证两条路径 PDF 不分叉。
+    ///
+    /// # 泛型 `S`
+    ///
+    /// `ctx` 携带 `&Library<S>`，`S` 从 `ctx` 的类型推断。`Light` trait
+    /// 本身带 `S` 泛型，方法参数不再显式标注 `S`——直接用
+    /// `LightSampleContext<'_, S>` 即可。
     fn sample_li(
         &self,
-        ctx: &LightSampleContext,
+        ctx: &LightSampleContext<'_, S>,
         sample: Vec2,
         wavelengths: &S::WavelengthContext,
     ) -> Option<LiSample<S>>;
@@ -394,13 +416,13 @@ pub trait Light<S: SpectralAlgebra>: Send + Sync {
     ///
     /// 契约：对任意 `s = sample_li(ctx, sample, wavelengths)`，应有
     /// `pdf_li(ctx, s.wi) == s.pdf`（delta 光源除外）。
-    fn pdf_li(&self, ctx: &LightSampleContext, wi: Vec3) -> f32;
+    fn pdf_li(&self, ctx: &LightSampleContext<'_, S>, wi: Vec3) -> f32;
 
     /// 光源的总辐射功率，逐波长（光谱值）。
     ///
     /// 用于 `LightSampler` 在构造阶段计算光源选择概率。选择概率需要
     /// 标量，标量转换（如亮度近似或参考波长）由 `LightSampler` 实现
-    /// 显式完成，不在本接口上暴露模糊的“标量功率近似”。
+    /// 显式完成，不在本接口上暴露模糊的"标量功率近似"。
     ///
     /// 返回的 `S` 是光谱值（`Spectrum<N>` 或 `Rgb`），不是标量；
     /// `S::Scalar` 才是标量。调用方需要标量时，通过
@@ -414,7 +436,7 @@ pub trait Light<S: SpectralAlgebra>: Send + Sync {
 /// 面光源能力。
 ///
 /// 仅 [`LightType::Area`] 的实现方需要实现本 trait。抽象层不提供
-/// “从 `dyn Light` 找回 `AreaLight`”的能力查询；持有具体实例的
+/// "从 `dyn Light` 找回 `AreaLight`"的能力查询；持有具体实例的
 /// 实现层（场景构建 / 积分器分发）自行枚举并 match。
 pub trait AreaLight<S: SpectralAlgebra>: Light<S> {
     /// 给定光源表面上的点、法线、UV、出射方向，返回发射辐射亮度。
@@ -432,7 +454,7 @@ pub trait AreaLight<S: SpectralAlgebra>: Light<S> {
     ///
     /// 传输方向隐含 `Radiance`（从着色点看向光源），与
     /// [`InfiniteLight::emitted_radiance`] 的 `Importance` 不同；原因见
-    /// [`LeSample`] 的“传输方向”文档。
+    /// [`LeSample`] 的"传输方向"文档。
     ///
     /// 与 [`Light::light_type`] 的契约：实现本 trait ⇒ `light_type()` 必须
     /// 返回 [`LightType::Area`]。
@@ -467,14 +489,14 @@ pub trait AreaLight<S: SpectralAlgebra>: Light<S> {
 /// 让这条约束无法被实现方拆散。
 ///
 /// **传输方向隐含 `Importance`**（从光源射向场景），见 [`LeSample`]
-/// 的“传输方向”文档。`sample_li` 通过 [`Self::sample_li_via_le`] 复用
+/// 的"传输方向"文档。`sample_li` 通过 [`Self::sample_li_via_le`] 复用
 /// 本 trait 的采样，把方向取反后作为 `Radiance` 方向的入射光。
 pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
     /// 沿逃逸光线的辐射亮度。
     ///
     /// 命名说明：方法名来自渲染方程发射项 `L_e` 的语义读法
     /// "emitted radiance"，与 [`AreaLight::emitted_radiance`] 同名同义
-    /// （都是“给定方向求发射辐射亮度”），仅参数形式不同（无限远光源
+    /// （都是"给定方向求发射辐射亮度"），仅参数形式不同（无限远光源
     /// 只有射线，没有表面点）。两者不会在同一类型上同时实现
     /// （见 [`Light::light_type`] 契约），因此同名不引入调用歧义。
     ///
@@ -499,7 +521,7 @@ pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
     /// 求值时的 `ray.direction` **反向**；原因见 [`LeSample::direction`]。
     ///
     /// **传输方向隐含 `Importance`**，无 `TransportMode` 参数；原因见
-    /// [`LeSample`] 的“传输方向”文档。
+    /// [`LeSample`] 的"传输方向"文档。
     ///
     /// 参数 `sample` 是调用方从 sampler 取出的 2D 均匀样本；本方法不管理
     /// sampler 状态、不消耗维度。
@@ -594,6 +616,13 @@ pub trait InfiniteLight<S: SpectralAlgebra>: Light<S> {
 ///   `impl Sampler`，包装层用 `dyn` 转发）。虚分派限制在包装层。
 /// - **改签名**：把 `sample` 改为 `&mut dyn Sampler`，牺牲单态化换
 ///   trait object。适合策略切换频繁、单次采样开销可接受的场景。
+///
+/// # 泛型 `S`
+///
+/// `sample` / `pdf` 泛型化在 `S: SpectralAlgebra` 上——`ctx` 携带
+/// `&Library<S>`，`S` 必须传播。`LightSampler` trait 本身不带 `S`，
+/// 方法级泛型化导致它不 object-safe；`Scene::light_sampler()` 返回
+/// `Option<&LS>` 泛型引用，走单态化，无 `dyn` 需求。
 pub trait LightSampler: Send + Sync {
     /// 按构造时固定的选择策略选一个光源。
     ///
@@ -605,13 +634,13 @@ pub trait LightSampler: Send + Sync {
     ///   一致。
     ///
     /// 返回的 `LightSelection::consumed` 报告本次采样实际消耗的维度数。
-    fn sample<SM: Sampler>(
+    fn sample<S: SpectralAlgebra, SM: Sampler>(
         &self,
-        ctx: &LightSampleContext,
+        ctx: &LightSampleContext<'_, S>,
         sampler: &mut SM,
         dimension: u32,
     ) -> Option<LightSelection>;
-    
+
     /// 给定光源 ID，返回选择该光源的概率。
     ///
     /// 用于 MIS 权重计算：`total_pdf = light_pdf * light.pdf_li(...)`。
@@ -621,7 +650,11 @@ pub trait LightSampler: Send + Sync {
     ///
     /// `ctx` 参数供依赖接收点位置的选择策略（如 BVH 光源采样器）使用；
     /// 不依赖位置的采样器可以忽略 `ctx`。
-    fn pdf(&self, ctx: &LightSampleContext, light_id: LightId) -> f32;
+    fn pdf<S: SpectralAlgebra>(
+        &self,
+        ctx: &LightSampleContext<'_, S>,
+        light_id: LightId,
+    ) -> f32;
 
     /// 采样最多消耗的维度数。
     ///

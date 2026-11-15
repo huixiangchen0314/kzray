@@ -7,9 +7,10 @@ use std::ops::Range;
 
 use kzray_abs::ray::Ray;
 
-use crate::geometry::ShapeHit;
 use crate::geometry::RayA;
 use crate::geometry::ShapeA;
+use crate::geometry::ShapeHit;
+use crate::geometry::shape::AreaSample;
 
 /// 无限平面（**运行时光几何表示**）。
 ///
@@ -107,8 +108,6 @@ impl PlaneA {
             normal: Vec3A::Y,
         }
     }
-
-
 }
 
 impl ShapeA for PlaneA {
@@ -122,7 +121,6 @@ impl ShapeA for PlaneA {
         t >= t_range.start && t < t_range.end
     }
 
-    
     /// 光线与平面求交。
     ///
     /// 收 `&RayA`——调用方应在 trace 入口把 `Ray` 转成 `RayA` 一次，
@@ -143,8 +141,8 @@ impl ShapeA for PlaneA {
         }
 
         // ── 热点内部全程 Vec3A ──
-        let position_a = ray.at(t);                 // Vec3A
-        // UV 直接取 Vec3A 的标量分量，无需转回 Vec3
+        let position_a = ray.at(t); // Vec3A
+                                    // UV 直接取 Vec3A 的标量分量，无需转回 Vec3
         let uv = Vec2::new(position_a.x, position_a.z);
         let distance = t * ray.dir.length();
 
@@ -157,6 +155,10 @@ impl ShapeA for PlaneA {
             uv,
         })
     }
+
+    fn sample_area(&self, _u: Vec2) -> Option<AreaSample> {
+        None // 无限平面无面积采样
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -166,14 +168,20 @@ impl ShapeA for PlaneA {
 impl From<Plane> for PlaneA {
     #[inline]
     fn from(p: Plane) -> Self {
-        PlaneA { point: p.point.into(), normal: p.normal.into() }
+        PlaneA {
+            point: p.point.into(),
+            normal: p.normal.into(),
+        }
     }
 }
 
 impl From<PlaneA> for Plane {
     #[inline]
     fn from(p: PlaneA) -> Self {
-        Plane { point: p.point.into(), normal: p.normal.into() }
+        Plane {
+            point: p.point.into(),
+            normal: p.normal.into(),
+        }
     }
 }
 
@@ -293,11 +301,7 @@ mod tests {
     #[test]
     fn plane_intersect_forwards_to_plane_a() {
         let p = Plane::new(Vec3::new(0.3, -0.2, 0.5), Vec3::new(1.0, 2.0, -0.5));
-        let r = Ray::new(
-            Vec3::new(-5.0, 1.0, 0.5),
-            Vec3::new(1.0, -0.3, 0.2),
-            0.0,
-        );
+        let r = Ray::new(Vec3::new(-5.0, 1.0, 0.5), Vec3::new(1.0, -0.3, 0.2), 0.0);
 
         let a = p.intersect(&r, INF);
         let b = PlaneA::from(p).intersect(&RayA::from(r), INF);
@@ -324,7 +328,6 @@ mod tests {
         assert!((p.normal - back.normal).length() < 1e-6);
     }
 }
-
 
 /// 无限平面经任何仿射变换后仍无界——返回无限 AABB。
 ///

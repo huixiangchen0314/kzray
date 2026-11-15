@@ -14,9 +14,20 @@
 //! `LightSampler` 只负责选择，不负责采样光源内部。返回 `LightId` 后，
 //! 调用方通过 `Scene::light(id)` 查 `&dyn Light<S>` 再调 `sample_li`。
 //! 所以采样器只需要 `Vec<LightId>` + 概率表。
+//!
+//! # `LightSampleContext` 与 `S` 泛型
+//!
+//! `sample` / `pdf` 方法泛型化在 `S: SpectralAlgebra`——`LightSampleContext<'_, S>`
+//! 携带 `&Library<S>`（未来 `MeshAreaLight` 采样器用），`S` 必须显式
+//! 传播。当前两个采样器不读 `library`——只做 id 选择，与光谱无关。
+//!
+//! `LightSampler` trait 本身不带 `S`——`S` 通过方法参数传播。代价是
+//! trait 不 object-safe，但 `Scene::light_sampler()` 返回 `Option<&LS>`
+//! 泛型引用，走单态化，无 `dyn` 需求。
 
 use kzray_abs::light::{LightSampleContext, LightSampler, LightSelection};
 use kzray_abs::sampler::Sampler;
+use kzray_abs::spectrum::SpectralAlgebra;
 use kzray_data::common::LightId;
 
 // ═══════════════════════════════════════════════════════════════
@@ -57,9 +68,9 @@ impl UniformLightSampler {
 }
 
 impl LightSampler for UniformLightSampler {
-    fn sample<SM: Sampler>(
+    fn sample<S: SpectralAlgebra, SM: Sampler>(
         &self,
-        _ctx: &LightSampleContext,
+        _ctx: &LightSampleContext<'_, S>,
         sampler: &mut SM,
         dimension: u32,
     ) -> Option<LightSelection> {
@@ -77,7 +88,11 @@ impl LightSampler for UniformLightSampler {
         })
     }
 
-    fn pdf(&self, _ctx: &LightSampleContext, light_id: LightId) -> f32 {
+    fn pdf<S: SpectralAlgebra>(
+        &self,
+        _ctx: &LightSampleContext<'_, S>,
+        light_id: LightId,
+    ) -> f32 {
         if self.light_ids.contains(&light_id) {
             1.0 / self.light_ids.len() as f32
         } else {
@@ -173,9 +188,9 @@ impl PowerLightSampler {
 }
 
 impl LightSampler for PowerLightSampler {
-    fn sample<SM: Sampler>(
+    fn sample<S: SpectralAlgebra, SM: Sampler>(
         &self,
-        _ctx: &LightSampleContext,
+        _ctx: &LightSampleContext<'_, S>,
         sampler: &mut SM,
         dimension: u32,
     ) -> Option<LightSelection> {
@@ -198,7 +213,11 @@ impl LightSampler for PowerLightSampler {
         })
     }
 
-    fn pdf(&self, _ctx: &LightSampleContext, light_id: LightId) -> f32 {
+    fn pdf<S: SpectralAlgebra>(
+        &self,
+        _ctx: &LightSampleContext<'_, S>,
+        light_id: LightId,
+    ) -> f32 {
         // 线性查找。光源数量通常小（< 100），可接受。
         // 如果光源多，可以用 HashMap<LightId, usize> 加速。
         for (idx, &id) in self.light_ids.iter().enumerate() {
@@ -222,7 +241,9 @@ impl LightSampler for PowerLightSampler {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use glam::UVec2;
+    use glam::{UVec2, Vec3};
+    use kzray_abs::library::Library;
+    use kzray_abs::spectrum::Rgb;
 
     struct FixedSampler {
         value: f32,
@@ -235,10 +256,16 @@ mod tests {
         }
     }
 
-    fn ctx() -> LightSampleContext {
+    /// 空 `Library<Rgb>`。采样器不读 `library`，仅需占位。
+    fn empty_lib() -> Library<Rgb> {
+        Library::new()
+    }
+
+    fn ctx<S: SpectralAlgebra>(lib: &Library<S>) -> LightSampleContext<'_, S> {
         LightSampleContext {
-            position: glam::Vec3::ZERO,
-            normal: glam::Vec3::Y,
+            position: Vec3::ZERO,
+            normal: Vec3::Y,
+            library: lib,
         }
     }
 
@@ -246,13 +273,15 @@ mod tests {
 
     #[test]
     fn uniform_empty_returns_none() {
+        let lib = empty_lib();
         let s = UniformLightSampler::new(vec![]);
         let mut sampler = FixedSampler { value: 0.5 };
-        assert!(s.sample(&ctx(), &mut sampler, 0).is_none());
+        assert!(s.sample(&ctx(&lib), &mut sampler, 0).is_none());
     }
 
     #[test]
     fn uniform_selects_all_ids() {
+        let lib = empty_lib();
         let ids = vec![LightId::from(10), LightId::from(20), LightId::from(30)];
         let s = UniformLightSampler::new(ids.clone());
         let n = ids.len() as f32;
@@ -260,7 +289,7 @@ mod tests {
         for (i, expected_id) in ids.iter().enumerate() {
             let u = (i as f32 + 0.5) / n;
             let mut sampler = FixedSampler { value: u };
-            let sel = s.sample(&ctx(), &mut sampler, 0).unwrap();
+            let sel = s.sample(&ctx(&lib), &mut sampler, 0).unwrap();
             assert_eq!(sel.light_id, *expected_id);
             assert!((sel.light_pdf - 1.0 / n).abs() < 1e-6);
             assert_eq!(sel.consumed, 1);
@@ -269,30 +298,32 @@ mod tests {
 
     #[test]
     fn uniform_pdf_consistent() {
+        let lib = empty_lib();
         let ids = vec![LightId::from(1), LightId::from(2), LightId::from(3)];
         let s = UniformLightSampler::new(ids.clone());
         for id in &ids {
-            assert!((s.pdf(&ctx(), *id) - 1.0 / 3.0).abs() < 1e-6);
+            assert!((s.pdf(&ctx(&lib), *id) - 1.0 / 3.0).abs() < 1e-6);
         }
-        assert_eq!(s.pdf(&ctx(), LightId::from(99)), 0.0);
+        assert_eq!(s.pdf(&ctx(&lib), LightId::from(99)), 0.0);
     }
 
     #[test]
     fn uniform_sample_pdf_consistent() {
+        let lib = empty_lib();
         let ids = vec![LightId::from(1), LightId::from(2)];
         let s = UniformLightSampler::new(ids);
         let mut sampler = FixedSampler { value: 0.3 };
-        let sel = s.sample(&ctx(), &mut sampler, 0).unwrap();
-        let expected = s.pdf(&ctx(), sel.light_id);
+        let sel = s.sample(&ctx(&lib), &mut sampler, 0).unwrap();
+        let expected = s.pdf(&ctx(&lib), sel.light_id);
         assert!((sel.light_pdf - expected).abs() < 1e-6);
     }
 
     #[test]
     fn uniform_u_boundary() {
-        // u 接近 1.0 时不越界
+        let lib = empty_lib();
         let s = UniformLightSampler::new(vec![LightId::from(1), LightId::from(2)]);
         let mut sampler = FixedSampler { value: 0.999999 };
-        let sel = s.sample(&ctx(), &mut sampler, 0);
+        let sel = s.sample(&ctx(&lib), &mut sampler, 0);
         assert!(sel.is_some());
     }
 
@@ -300,53 +331,54 @@ mod tests {
 
     #[test]
     fn power_pdf_proportional_to_weight() {
+        let lib = empty_lib();
         let s =
             PowerLightSampler::from_weights(vec![(LightId::from(1), 3.0), (LightId::from(2), 1.0)]);
-        // 概率 0.75 / 0.25
-        assert!((s.pdf(&ctx(), LightId::from(1)) - 0.75).abs() < 1e-6);
-        assert!((s.pdf(&ctx(), LightId::from(2)) - 0.25).abs() < 1e-6);
+        assert!((s.pdf(&ctx(&lib), LightId::from(1)) - 0.75).abs() < 1e-6);
+        assert!((s.pdf(&ctx(&lib), LightId::from(2)) - 0.25).abs() < 1e-6);
     }
 
     #[test]
     fn power_pdf_sums_to_one() {
+        let lib = empty_lib();
         let s = PowerLightSampler::from_weights(vec![
             (LightId::from(1), 0.5),
             (LightId::from(2), 0.3),
             (LightId::from(3), 0.2),
         ]);
         let mut sum = 0.0;
-        for id in [1u32, 2, 3] {
-            sum += s.pdf(&ctx(), LightId::from(id as u64));
+        for id in [1u64, 2, 3] {
+            sum += s.pdf(&ctx(&lib), LightId::from(id));
         }
         assert!((sum - 1.0).abs() < 1e-5);
     }
 
     #[test]
     fn power_sample_respects_cdf() {
+        let lib = empty_lib();
         let s = PowerLightSampler::from_weights(vec![
-            (LightId::from(1), 1.0), // pdf 0.5, cdf [0, 0.5]
-            (LightId::from(2), 1.0), // pdf 0.5, cdf [0.5, 1.0]
+            (LightId::from(1), 1.0),
+            (LightId::from(2), 1.0),
         ]);
 
-        // u=0.2 → 选 1
         let mut sampler = FixedSampler { value: 0.2 };
-        let sel = s.sample(&ctx(), &mut sampler, 0).unwrap();
+        let sel = s.sample(&ctx(&lib), &mut sampler, 0).unwrap();
         assert_eq!(sel.light_id, LightId::from(1));
 
-        // u=0.7 → 选 2
         let mut sampler = FixedSampler { value: 0.7 };
-        let sel = s.sample(&ctx(), &mut sampler, 0).unwrap();
+        let sel = s.sample(&ctx(&lib), &mut sampler, 0).unwrap();
         assert_eq!(sel.light_id, LightId::from(2));
     }
 
     #[test]
     fn power_zero_weight_excluded() {
+        let lib = empty_lib();
         let s = PowerLightSampler::from_weights(vec![
             (LightId::from(1), 1.0),
-            (LightId::from(2), 0.0), // 排除
+            (LightId::from(2), 0.0),
         ]);
         assert_eq!(s.len(), 1);
-        assert_eq!(s.pdf(&ctx(), LightId::from(2)), 0.0);
+        assert_eq!(s.pdf(&ctx(&lib), LightId::from(2)), 0.0);
     }
 
     #[test]
@@ -358,21 +390,27 @@ mod tests {
     #[test]
     #[should_panic(expected = "total weight must be positive")]
     fn power_all_zero_weights_panics() {
-        PowerLightSampler::from_weights(vec![(LightId::from(1), 0.0), (LightId::from(2), 0.0)]);
+        PowerLightSampler::from_weights(vec![
+            (LightId::from(1), 0.0),
+            (LightId::from(2), 0.0),
+        ]);
     }
 
     #[test]
     fn power_u_boundary() {
-        // u 接近 1.0，partition_point 可能返回 len，需兜底
-        let s =
-            PowerLightSampler::from_weights(vec![(LightId::from(1), 1.0), (LightId::from(2), 1.0)]);
+        let lib = empty_lib();
+        let s = PowerLightSampler::from_weights(vec![
+            (LightId::from(1), 1.0),
+            (LightId::from(2), 1.0),
+        ]);
         let mut sampler = FixedSampler { value: 0.9999999 };
-        let sel = s.sample(&ctx(), &mut sampler, 0);
+        let sel = s.sample(&ctx(&lib), &mut sampler, 0);
         assert!(sel.is_some());
     }
 
     #[test]
     fn power_sample_pdf_consistent() {
+        let lib = empty_lib();
         let s = PowerLightSampler::from_weights(vec![
             (LightId::from(1), 2.0),
             (LightId::from(2), 1.0),
@@ -380,8 +418,8 @@ mod tests {
         ]);
         for u in [0.1, 0.3, 0.5, 0.7, 0.9] {
             let mut sampler = FixedSampler { value: u };
-            let sel = s.sample(&ctx(), &mut sampler, 0).unwrap();
-            let expected = s.pdf(&ctx(), sel.light_id);
+            let sel = s.sample(&ctx(&lib), &mut sampler, 0).unwrap();
+            let expected = s.pdf(&ctx(&lib), sel.light_id);
             assert!(
                 (sel.light_pdf - expected).abs() < 1e-5,
                 "pdf mismatch at u={}: sample={}, expected={}",

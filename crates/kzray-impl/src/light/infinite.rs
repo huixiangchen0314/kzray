@@ -32,7 +32,7 @@ impl<S: SpectralAlgebra> Light<S> for ConstInfiniteLight<S> {
 
     fn sample_li(
         &self,
-        _ctx: &LightSampleContext,
+       _ctx: &LightSampleContext<'_, S>,
         _sample: Vec2,
         _wavelengths: &S::WavelengthContext,
     ) -> Option<LiSample<S>> {
@@ -40,7 +40,9 @@ impl<S: SpectralAlgebra> Light<S> for ConstInfiniteLight<S> {
         None
     }
 
-    fn pdf_li(&self, _ctx: &LightSampleContext, _wi: glam::Vec3) -> f32 {
+    fn pdf_li(&self,
+        _ctx: &LightSampleContext<'_, S>,
+        _wi: glam::Vec3) -> f32 {
         0.0
     }
 

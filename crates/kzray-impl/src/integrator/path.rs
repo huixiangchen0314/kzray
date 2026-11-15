@@ -121,6 +121,7 @@ where
                 let ctx = LightSampleContext {
                     position: hit.position,
                     normal: hit.shading_normal,
+                    library: scene.library(), 
                 };
 
                 if let Some(light_sampler) = scene.light_sampler() {

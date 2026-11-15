@@ -2,15 +2,15 @@
 
 use std::ops::Range;
 
-use glam::{Vec2, Vec3};
+use glam::{Vec2, Vec3, Vec3A};
 use kzray_abs::SurfaceHit;
 use kzray_data::InstanceId;
 
 use crate::geometry::RayA;
 
-pub trait ShapeA{
+pub trait ShapeA {
     fn intersect(&self, ray: &RayA, t_range: Range<f32>) -> Option<ShapeHit>;
-    
+
     /// 遮挡查询：`t_range` 内**任意**交点存在即返回 `true`。
     ///
     /// 与 [`ShapeA::intersect`] 的区别：
@@ -29,6 +29,14 @@ pub trait ShapeA{
     fn occluded(&self, ray: &RayA, t_range: Range<f32>) -> bool {
         self.intersect(ray, t_range).is_some()
     }
+
+    /// 在表面均匀采样一点。`u ∈ [0,1)²`。
+    ///
+    /// 返回几何**所在空间**的采样点。对面积光，几何已在世界空间，
+    /// 返回值即世界空间。无限平面无面积，返回 `None`。
+    fn sample_area(&self, u: Vec2) -> Option<AreaSample>;
+
+
 }
 
 /// 图元求交的纯几何结果。
@@ -81,4 +89,20 @@ impl ShapeHit {
             prim_id: 0,
         }
     }
+}
+
+/// 表面均匀采样结果（**几何所在空间**，即世界空间——调用方传入的
+/// 几何已经是世界空间）。
+pub struct AreaSample {
+    /// 采样点。
+    pub position: Vec3A,
+    /// 采样点法线（单位向量，朝外）。
+    pub normal: Vec3A,
+
+    /// 面积测度
+    /// 面积概率密度 `1 / 表面积`。
+    ///
+    /// 转立体角 pdf 由 `ShapeAreaLight::sample_li` 做：
+    /// `pdf_solid = pdf_area * distance² / cos_light`。
+    pub pdf_area: f32,
 }

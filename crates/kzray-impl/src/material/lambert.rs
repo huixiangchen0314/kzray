@@ -91,17 +91,36 @@ impl<S: SpectralAlgebra> BSDFBuilder<S> for LambertBSDFBuilder {
         _wavelengths: &S::WavelengthContext,
         lib: &Library<S>,
     ) -> BSDF<S> {
-        // 从纹理求值 albedo。
-        //
-        // 传 `None` 作为微分——`SurfaceHit` 当前不带 `Differential`。
-        // 阶段 5 给 `SurfaceHit` 加 `differential` 字段后，改为
-        // `hit.differential.as_ref()` 启用 MIP。
         let albedo = lib.albedo(self.albedo).eval(hit.uv, None);
 
         let normal = hit.shading_normal;
-        let wo_positive = wo.dot(normal) > 0.0;
+        let cos_wo = wo.dot(normal);
 
-        // 单面 + 反向 wo：零反射 BSDF。
+        // ── 擦边处理 ──
+        //
+        // `BSDF::new` 严格要求 `wo.dot(normal) > 0`。当 `cos_wo == 0`
+        // 时（光线恰好垂直于表面），翻转法线也得到 `-0 == 0`，不满足
+        // `> 0`——这是数值边界，不是方向错误。
+        //
+        // 物理上擦边反射趋于零。返回零反射 BSDF 是正确语义：不引入
+        // 宽容，只是把"擦边无贡献"从"构造失败"变成"构造出无反射的
+        // BSDF"，让渲染继续。
+        const COS_EDGE_EPS: f32 = 1e-6;
+        if cos_wo.abs() < COS_EDGE_EPS {
+            let zero_bxdf: Arc<dyn BxDF<S>> = Arc::new(Diffuse::new(S::zero()));
+            return BSDF::new(
+                vec![BxDFEntry::new(zero_bxdf, 1.0, S::zero())],
+                // 用 normal 本身作为 wo，dot(normal, normal) = 1 > 0，
+                // BSDF::new 必定成功。反射为零，wo 的选择不影响结果。
+                normal,
+                normal,
+            )
+            .expect("zero BSDF with wo = normal should succeed");
+        }
+
+        let wo_positive = cos_wo > 0.0;
+
+        // 单面材质 + 反向 wo：零反射（光线穿透）。
         if self.single_sided && !wo_positive {
             let zero_bxdf: Arc<dyn BxDF<S>> = Arc::new(Diffuse::new(S::zero()));
             return BSDF::new(
@@ -112,7 +131,7 @@ impl<S: SpectralAlgebra> BSDFBuilder<S> for LambertBSDFBuilder {
             .expect("zero BSDF construction should succeed");
         }
 
-        // 双面 + 反向 wo：翻转法线。
+        // 双面材质 + 反向 wo：翻转法线。
         let normal = if wo_positive { normal } else { -normal };
 
         let bxdf: Arc<dyn BxDF<S>> = Arc::new(Diffuse::new(albedo));
