@@ -13,3 +13,4 @@ Cargo.lock
 
 # Emacs backup files (file~)
 *~
+.idea
