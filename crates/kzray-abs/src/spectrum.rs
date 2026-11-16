@@ -1,3 +1,4 @@
+//! kzray-abs/src/spectrum.rs
 //! 标量代数与光谱代数：`ScalarAlgebra` / `SpectralAlgebra` trait 定义与所有实现。
 //!
 //! 分层：
