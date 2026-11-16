@@ -4,6 +4,9 @@ Cargo.lock
 *.ppm
 *.png
 *.jpg
+*.hdr
+*.exr
+
 
 # Emacs auto-save files (#file#)
 \#*\#

@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use glam::Vec3;
+use kzray_abs::bsdf::Diffuse;
 use kzray_abs::{
     BSDFBuilder, BxDF, BxDFEntry, BxDFFlags, BxDFSample, Library, Sampler, ScalarAlgebra,
     SpectralAlgebra, SurfaceHit, TransportMode, BSDF,
@@ -212,6 +213,20 @@ impl<S: SpectralAlgebra> BSDFBuilder<S> for ConductorBSDFBuilder {
         let f0 = lib.albedo(self.f0).eval(hit.uv, None);
         let roughness = lib.roughness(self.roughness).eval(hit.uv, None);
         let alpha = roughness * roughness;
+
+
+        let original_normal = hit.shading_normal;
+        let cos_wo = wo.dot(original_normal);
+        
+        
+        const COS_EDGE_EPS: f32 = 1e-6;
+        if cos_wo.abs() < COS_EDGE_EPS {
+            let zero = S::zero();
+            let bxdf: Arc<dyn BxDF<S>> = Arc::new(Diffuse::new(zero));
+            return BSDF::new(vec![BxDFEntry::new(bxdf, 1.0, zero)], wo, wo)
+                .expect("zero BSDF with wo = normal should succeed");
+        }
+
 
         let normal = hit.shading_normal;
         let normal = if wo.dot(normal) > 0.0 {

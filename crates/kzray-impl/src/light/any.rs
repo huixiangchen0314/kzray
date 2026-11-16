@@ -28,6 +28,8 @@ use kzray_abs::light::{
 use kzray_abs::ray::Ray;
 use kzray_abs::spectrum::SpectralAlgebra;
 
+use crate::light::HdrInfiniteLight;
+
 use super::{ConstInfiniteLight, PointLight, ShapeAreaLight};
 
 // ═══════════════════════════════════════════════════════════════
@@ -155,7 +157,7 @@ impl<S: SpectralAlgebra> AreaLight<S> for AnyAreaLight<S> {
 /// 多个（分层天空等）。
 pub enum AnyInfiniteLight<S: SpectralAlgebra> {
     Constant(ConstInfiniteLight<S>),
-    // 未来：Hdr(HdrInfiniteLight<S>),
+    Hdr(HdrInfiniteLight<S>),
 }
 
 impl<S: SpectralAlgebra> Light<S> for AnyInfiniteLight<S> {
@@ -192,17 +194,15 @@ impl<S: SpectralAlgebra> InfiniteLight<S> for AnyInfiniteLight<S> {
     fn emitted_radiance(&self, ray: &Ray, wavelengths: &S::WavelengthContext) -> S {
         match self {
             Self::Constant(l) => l.emitted_radiance(ray, wavelengths),
+            Self::Hdr(l) => l.emitted_radiance(ray, wavelengths),
         }
     }
 
     #[inline]
-    fn sample_le(
-        &self,
-        sample: Vec2,
-        wavelengths: &S::WavelengthContext,
-    ) -> Option<LeSample<S>> {
+    fn sample_le(&self, sample: Vec2, wavelengths: &S::WavelengthContext) -> Option<LeSample<S>> {
         match self {
             Self::Constant(l) => l.sample_le(sample, wavelengths),
+            Self::Hdr(l) => l.sample_le(sample, wavelengths),
         }
     }
 
@@ -210,6 +210,7 @@ impl<S: SpectralAlgebra> InfiniteLight<S> for AnyInfiniteLight<S> {
     fn pdf_le(&self, direction: Vec3, wavelengths: &S::WavelengthContext) -> f32 {
         match self {
             Self::Constant(l) => l.pdf_le(direction, wavelengths),
+            Self::Hdr(l) => l.pdf_le(direction, wavelengths),
         }
     }
 }
